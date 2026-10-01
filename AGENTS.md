@@ -15,7 +15,7 @@ Python 3.12, el SDK oficial de Gemini y las APIs de Google Drive y Sheets. Para 
 
 ## Seguridad
 - Credenciales solo por variables de entorno (ver `.env.example`). Nunca en código, notebook, trazas ni git.
-- Todas las llamadas al LLM incluyen `SECURITY_SCOPE_v1`.
+- Todas las llamadas al LLM incluyen el bloque de alcance vigente, `SECURITY_SCOPE_v2` (la v1 se conserva por trazabilidad; ver A13 en `docs/dev_prompts.md`).
 - El agente nunca transfiere, paga, borra, modifica cuentas ni ejecuta herramientas ante peticiones fuera de alcance.
 - `data/` contiene solo recibos sintéticos o anonimizados.
 - Drive y Sheets: solo una carpeta y una planilla de prueba; Sheets solo admite agregar filas.

@@ -42,6 +42,7 @@ from app.conversation import Conversation
 from app.llm import AGENT_TEMPERATURE, LLMCallError, LLMClient
 from app.models import ALLOWED_CATEGORIES, CONFIDENCE_THRESHOLD, UNKNOWN, EventType, ReceiptData, TraceEvent
 from app.prompts import SECURITY_SCOPE_ID
+from app.security import sanitize_failure, sanitize_observation
 from app.trace import Tracer
 
 MAX_STEPS = 6
@@ -163,7 +164,14 @@ def _needs_confirmation(receipt: ReceiptData) -> Optional[str]:
 
 
 class _Dispatcher:
-    """Ejecuta las tools aplicando validación y rieles. Nunca lanza excepciones."""
+    """Ejecuta las tools aplicando validación y rieles. Nunca lanza excepciones.
+
+    Saneamiento (Etapa 8): la observación que vuelve al LLM nunca incluye rutas,
+    comandos, nombres de variables de entorno ni pistas internas. El detalle original
+    de un fallo de servicio queda en `last_diagnostic` y el agente lo registra solo en
+    la traza (enmascarado). Los resultados de las tools reales (`DriveResult`,
+    `SheetResult`) conservan su `error` detallado para quien desarrolla.
+    """
 
     def __init__(
         self,
@@ -174,20 +182,29 @@ class _Dispatcher:
         self.ctx = ctx
         self.llm = llm
         self.overrides = overrides
+        self.last_diagnostic: Optional[str] = None  # detalle oculto del último despacho
 
     def dispatch(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+        self.last_diagnostic = None
         if name not in _REQUIRED_ARGS:
-            return {"ok": False, "error": f"Herramienta desconocida: {name}. No se ejecutó nada."}
+            # El nombre lo eligió el modelo: no se refleja en la observación.
+            self.last_diagnostic = f"herramienta desconocida: {str(name)[:60]}"
+            return {"ok": False, "error": "Herramienta desconocida. No se ejecutó nada."}
         missing = [a for a in _REQUIRED_ARGS[name] if a not in args or args[a] in (None, "")]
         if missing:
             return {"ok": False, "error": f"Faltan argumentos obligatorios: {', '.join(missing)}."}
         handler = getattr(self, f"_do_{name}")
         try:
-            return handler(args)
+            observation = handler(args)
         except LLMCallError:
             return {"ok": False, "error": "Falló la llamada al modelo de visión; reintenta más tarde."}
         except Exception as error:  # noqa: BLE001 - solo el tipo, nunca detalles internos
             return {"ok": False, "error": f"Falló la herramienta ({type(error).__name__})."}
+        # Red de seguridad final sobre cualquier observación.
+        observation, leaked = sanitize_observation(name, observation)
+        if leaked is not None:
+            self.last_diagnostic = leaked
+        return observation
 
     # -- tools -------------------------------------------------------------------
     def _image_error(self, image_id: Any = None) -> Optional[dict[str, Any]]:
@@ -246,6 +263,11 @@ class _Dispatcher:
             )
         if result.success and result.web_view_link:
             self.ctx.drive_links.add(result.web_view_link)
+        if not result.success:
+            observation, self.last_diagnostic = sanitize_failure(
+                "guardar_recibo", result.error, file_name=None, web_view_link=None
+            )
+            return observation
         return {
             "ok": result.success,
             "file_name": result.file_name,
@@ -292,6 +314,11 @@ class _Dispatcher:
             result = registrar_gasto(**kwargs, tracer=Tracer(console=False, write_file=False))
         if result.success and result.row_number is not None:
             self.ctx.registered_row = result.row_number
+        if not result.success and not result.duplicate:
+            observation, self.last_diagnostic = sanitize_failure(
+                "registrar_gasto", result.error, row_number=None, duplicate=False
+            )
+            return observation
         return {
             "ok": result.success,
             "row_number": result.row_number,
@@ -454,7 +481,9 @@ class ExpenseAgent:
                 tracer.record(
                     EventType.TOOL_RESULT,
                     {"tool": call.name, "ok": observation.get("ok"), "result": observation,
-                     "agent_step": steps},
+                     "agent_step": steps,
+                     **({"diagnostic": dispatcher.last_diagnostic}
+                        if dispatcher.last_diagnostic else {})},
                 )
                 tool_calls.append(
                     {"name": call.name, "args": call.args, "ok": bool(observation.get("ok")),
