@@ -56,6 +56,7 @@ class DriveResult(BaseModel):
     file_id: Optional[str] = None
     file_name: Optional[str] = None
     web_view_link: Optional[str] = None
+    error: Optional[str] = None  # mensaje seguro (sin rutas ni tokens) si success es False
 
 
 class SheetResult(BaseModel):

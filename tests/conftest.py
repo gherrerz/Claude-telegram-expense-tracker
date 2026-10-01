@@ -5,7 +5,12 @@ from app.config import config_status
 
 
 def pytest_collection_modifyitems(config, items):
-    live_items = [item for item in items if "live" in item.keywords]
+    # Las pruebas de Google Drive (Etapa 4) se omiten por su propia condición.
+    live_items = [
+        item
+        for item in items
+        if "live" in item.keywords and "stage4" not in item.nodeid
+    ]
     if not live_items:
         return
     status = config_status()  # solo presencia de variables, nunca valores

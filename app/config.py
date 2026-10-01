@@ -16,11 +16,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 DEFAULT_LLM_MAX_RETRIES = 5
 DEFAULT_LLM_MIN_SECONDS_BETWEEN_CALLS = 4.0
+# Ruta por defecto (relativa a la raíz del repositorio) del token OAuth de Google.
+DEFAULT_GOOGLE_OAUTH_TOKEN = "secrets/token.json"
 
 # Variables obligatorias por grupo de uso.
 REQUIRED_BY_GROUP: dict[str, tuple[str, ...]] = {
     "llm": ("GEMINI_API_KEY", "LLM_MODEL"),
-    "google": ("GOOGLE_APPLICATION_CREDENTIALS", "DRIVE_FOLDER_ID", "SHEET_ID"),
+    "google": ("GOOGLE_OAUTH_CLIENT_SECRETS", "DRIVE_FOLDER_ID", "SHEET_ID"),
     "telegram": ("TELEGRAM_BOT_TOKEN",),
 }
 
@@ -29,7 +31,8 @@ ALL_VARIABLES: tuple[str, ...] = (
     "LLM_MODEL",
     "LLM_MAX_RETRIES",
     "LLM_MIN_SECONDS_BETWEEN_CALLS",
-    "GOOGLE_APPLICATION_CREDENTIALS",
+    "GOOGLE_OAUTH_CLIENT_SECRETS",
+    "GOOGLE_OAUTH_TOKEN",
     "DRIVE_FOLDER_ID",
     "SHEET_ID",
     "TELEGRAM_BOT_TOKEN",
@@ -38,7 +41,8 @@ ALL_VARIABLES: tuple[str, ...] = (
 # Variables cuyo valor es secreto (las usa el trazador para enmascarar).
 SECRET_VARIABLES: tuple[str, ...] = (
     "GEMINI_API_KEY",
-    "GOOGLE_APPLICATION_CREDENTIALS",
+    "GOOGLE_OAUTH_CLIENT_SECRETS",
+    "GOOGLE_OAUTH_TOKEN",
     "TELEGRAM_BOT_TOKEN",
 )
 
@@ -62,7 +66,8 @@ class Settings:
     llm_model: Optional[str] = None
     llm_max_retries: int = DEFAULT_LLM_MAX_RETRIES
     llm_min_seconds_between_calls: float = DEFAULT_LLM_MIN_SECONDS_BETWEEN_CALLS
-    google_application_credentials: Optional[str] = None
+    google_oauth_client_secrets: Optional[str] = None
+    google_oauth_token: str = DEFAULT_GOOGLE_OAUTH_TOKEN
     drive_folder_id: Optional[str] = None
     sheet_id: Optional[str] = None
     telegram_bot_token: Optional[str] = None
@@ -145,7 +150,8 @@ def load_settings(
         llm_model=_clean(source, "LLM_MODEL"),
         llm_max_retries=retries,
         llm_min_seconds_between_calls=pause,
-        google_application_credentials=_clean(source, "GOOGLE_APPLICATION_CREDENTIALS"),
+        google_oauth_client_secrets=_clean(source, "GOOGLE_OAUTH_CLIENT_SECRETS"),
+        google_oauth_token=_clean(source, "GOOGLE_OAUTH_TOKEN") or DEFAULT_GOOGLE_OAUTH_TOKEN,
         drive_folder_id=_clean(source, "DRIVE_FOLDER_ID"),
         sheet_id=_clean(source, "SHEET_ID"),
         telegram_bot_token=_clean(source, "TELEGRAM_BOT_TOKEN"),

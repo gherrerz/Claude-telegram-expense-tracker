@@ -67,10 +67,14 @@ def test_usage_metrics_and_dedup_keys_are_not_masked():
 
 def test_env_secret_values_are_masked(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "valor-corto-de-prueba")
-    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/ruta/rara/archivo.txt")
-    result = mask_value({"texto": "x valor-corto-de-prueba y /ruta/rara/archivo.txt"})
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_SECRETS", "/ruta/rara/archivo.txt")
+    monkeypatch.setenv("GOOGLE_OAUTH_TOKEN", "/ruta/rara/otro-token.txt")
+    result = mask_value(
+        {"texto": "x valor-corto-de-prueba y /ruta/rara/archivo.txt y /ruta/rara/otro-token.txt"}
+    )
     assert "valor-corto-de-prueba" not in result["texto"]
     assert "/ruta/rara/archivo.txt" not in result["texto"]
+    assert "/ruta/rara/otro-token.txt" not in result["texto"]
 
 
 def test_extra_secrets_are_masked(tmp_path):

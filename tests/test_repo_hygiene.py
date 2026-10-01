@@ -25,7 +25,12 @@ REQUIRED_FILES = [
     "notebooks/demo.ipynb",
 ]
 
-SECRET_VARS = ["GEMINI_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS", "TELEGRAM_BOT_TOKEN"]
+SECRET_VARS = [
+    "GEMINI_API_KEY",
+    "GOOGLE_OAUTH_CLIENT_SECRETS",
+    "GOOGLE_OAUTH_TOKEN",
+    "TELEGRAM_BOT_TOKEN",
+]
 
 # Patrones típicos de secretos reales: claves de Google, de OpenRouter/OpenAI,
 # tokens de bots de Telegram y claves privadas.
@@ -94,6 +99,9 @@ def test_gitignore_excludes_secrets():
     assert ".env" in text
     assert "!.env.example" in text
     assert "credentials" in text
+    assert "token.json" in text
+    assert "client_secret" in text
+    assert "secrets/" in text
 
 
 def test_no_secrets_committed():
@@ -104,6 +112,11 @@ def test_no_secrets_committed():
         # `.env` y `.env.*` (salvo `.env.example`) están en .gitignore: contienen
         # los secretos locales del autor y nunca se versionan ni se leen aquí.
         if path.name.startswith(".env") and path.name != ".env.example":
+            continue
+        # Credenciales OAuth locales (también ignoradas por git): no se leen.
+        if path.name == "token.json" or path.name.startswith("client_secret"):
+            continue
+        if "secrets" in path.relative_to(ROOT).parts[:1]:
             continue
         try:
             content = path.read_text(encoding="utf-8")

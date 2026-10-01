@@ -6,6 +6,8 @@
 *credentials*.json
 *service-account*.json
 secrets/
+token.json
+client_secret*.json
 
 # Artefactos de ejecución
 traces/

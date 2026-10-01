@@ -21,7 +21,8 @@ FAKE_TOKEN = "123456789:" + "y" * 35
 EXAMPLE_ENV = {
     "GEMINI_API_KEY": FAKE_KEY,
     "LLM_MODEL": "modelo-de-prueba",
-    "GOOGLE_APPLICATION_CREDENTIALS": "ruta/falsa.json",
+    "GOOGLE_OAUTH_CLIENT_SECRETS": "ruta/falsa.json",
+    "GOOGLE_OAUTH_TOKEN": "ruta/falso-token.json",
     "DRIVE_FOLDER_ID": "carpeta-de-prueba",
     "SHEET_ID": "planilla-de-prueba",
     "TELEGRAM_BOT_TOKEN": FAKE_TOKEN,
@@ -76,6 +77,21 @@ def test_invalid_number_error_has_no_values():
         load_settings(["llm"], env=env)
     assert "LLM_MAX_RETRIES" in str(exc.value)
     assert "abc-secreto" not in str(exc.value)
+
+
+def test_google_oauth_settings_and_token_default():
+    settings = load_settings(["google"], env=EXAMPLE_ENV)
+    assert settings.google_oauth_client_secrets == "ruta/falsa.json"
+    assert settings.google_oauth_token == "ruta/falso-token.json"
+    env = {k: v for k, v in EXAMPLE_ENV.items() if k != "GOOGLE_OAUTH_TOKEN"}
+    assert load_settings(["google"], env=env).google_oauth_token == "secrets/token.json"
+
+
+def test_google_group_reports_missing_oauth_client_secrets():
+    env = {"DRIVE_FOLDER_ID": "x", "SHEET_ID": "y"}
+    with pytest.raises(ConfigError) as exc:
+        load_settings(["google"], env=env)
+    assert "GOOGLE_OAUTH_CLIENT_SECRETS" in str(exc.value)
 
 
 def test_unknown_group_rejected():
