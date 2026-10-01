@@ -23,7 +23,7 @@
 - [x] T3 Integración en el agente: disparo automático y aplicación del veredicto en código.
 - [x] T4 Pruebas offline: los tres veredictos, la independencia (sin historial) y que `RECHAZAR` no se puede desbloquear.
 - [x] T5 `scripts/verify_stage_11.py`, prueba `live`, Sección 9 del notebook, `docs/bonos.md` y bitácora.
-- [ ] T6 Verificación real.
+- [x] T6 Verificación real: `verify_stage_11.py` OK (benigno APROBAR y registrado; adversarial RECHAZAR con 0 ejecuciones; la insistencia sigue bloqueada); `pytest -m live` 1 passed.
 
 ## Evidencia
 Escritor `sonnet`, ruta delegated direct. Sin commits (los hace el orquestador).
