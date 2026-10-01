@@ -1,5 +1,4 @@
 # Dependencias (Python 3.12), todas con versión fijada.
-# Las etapas siguientes agregarán la librería de Telegram, también con versión fijada.
 pydantic==2.13.5
 python-dotenv==1.2.3
 pytest==9.1.1
@@ -19,3 +18,6 @@ google-api-python-client==2.201.0
 google-auth==2.59.1
 google-auth-oauthlib==1.5.0
 google-auth-httplib2==0.4.3
+
+# Etapa 13: demo de Telegram (async). Documentación: https://docs.python-telegram-bot.org
+python-telegram-bot==22.8
