@@ -87,3 +87,61 @@ class FakeDriveService:
 
     def files(self):
         return self._files
+
+
+SHEET_HEADER_ROW = ["Fecha", "Comercio", "Monto", "Categoría", "Recibo_URL"]
+
+
+class FakeSheetsValues:
+    """Imita `service.spreadsheets().values()` de Sheets v4 (`get` y `append`) con estado.
+
+    `append` agrega la fila a `rows` y responde con `updates.updatedRange`
+    calculado como lo haría la API (`<hoja>!A{n}:E{n}`).
+    """
+
+    def __init__(self, rows=None, sheet_title="Hoja 1", get_error=None, append_error=None,
+                 updated_range=None):
+        self.rows = [list(r) for r in (rows if rows is not None else [SHEET_HEADER_ROW])]
+        self.sheet_title = sheet_title
+        self.get_error = get_error
+        self.append_error = append_error
+        self.updated_range = updated_range  # fuerza el valor devuelto (None = calculado)
+        self.get_calls = []
+        self.append_calls = []
+
+    def get(self, **kwargs):
+        self.get_calls.append(kwargs)
+        if self.get_error is not None:
+            return _FakeRequest(self.get_error)
+        return _FakeRequest(
+            {"range": f"{self.sheet_title}!A1:E{len(self.rows)}", "values": [list(r) for r in self.rows]}
+        )
+
+    def append(self, **kwargs):
+        self.append_calls.append(kwargs)
+        if self.append_error is not None:
+            return _FakeRequest(self.append_error)
+        self.rows.extend([list(r) for r in kwargs["body"]["values"]])
+        number = len(self.rows)
+        title = self.sheet_title.replace("'", "''")
+        quoted = f"'{title}'" if any(c in self.sheet_title for c in " '!") else title
+        return _FakeRequest(
+            {
+                "spreadsheetId": kwargs["spreadsheetId"],
+                "updates": {
+                    "updatedRange": self.updated_range or f"{quoted}!A{number}:E{number}",
+                    "updatedRows": 1,
+                },
+            }
+        )
+
+
+class FakeSheetsService:
+    def __init__(self, **kwargs):
+        self._values = FakeSheetsValues(**kwargs)
+
+    def spreadsheets(self):
+        return self
+
+    def values(self):
+        return self._values

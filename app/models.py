@@ -64,6 +64,8 @@ class SheetResult(BaseModel):
 
     success: bool
     row_number: Optional[int] = None
+    duplicate: bool = False  # True si la fila ya existía; en ese caso no se escribió nada
+    error: Optional[str] = None  # mensaje seguro (sin rutas ni tokens) si success es False
 
 
 class EventType(str, Enum):
