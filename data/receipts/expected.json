@@ -1,0 +1,23 @@
+{
+  "receipt_normal.jpg": {
+    "fecha": "2026-09-12",
+    "comercio": "Los Aromos",
+    "monto": 18490,
+    "categoria": "Supermercado",
+    "dificultad": "normal"
+  },
+  "receipt_hard.jpg": {
+    "fecha": "2026-09-05",
+    "comercio": "Luna Azul",
+    "monto": 12990,
+    "categoria": "Alimentación",
+    "dificultad": "difícil"
+  },
+  "receipt_illegible.jpg": {
+    "fecha": "desconocido",
+    "comercio": "desconocido",
+    "monto": "desconocido",
+    "categoria": "desconocido",
+    "dificultad": "ilegible"
+  }
+}

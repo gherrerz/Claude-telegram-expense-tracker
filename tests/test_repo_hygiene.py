@@ -101,12 +101,18 @@ def test_no_secrets_committed():
         # Se omiten el entorno virtual y cachés: no son código del proyecto.
         if not path.is_file() or {".git", ".venv", "__pycache__", ".pytest_cache"} & set(path.parts):
             continue
+        # `.env` y `.env.*` (salvo `.env.example`) están en .gitignore: contienen
+        # los secretos locales del autor y nunca se versionan ni se leen aquí.
+        if path.name.startswith(".env") and path.name != ".env.example":
+            continue
         try:
             content = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             continue
         for pattern in SECRET_PATTERNS:
-            assert not pattern.search(content), f"Posible secreto en {path.relative_to(ROOT)}"
+            # El mensaje no incluye el contenido, solo la ruta.
+            if pattern.search(content):
+                pytest.fail(f"Posible secreto en {path.relative_to(ROOT)}", pytrace=False)
 
 
 def test_notebook_is_valid():
