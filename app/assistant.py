@@ -5,12 +5,20 @@
 | Ruta               | Camino                                                       | Tools |
 |--------------------|--------------------------------------------------------------|-------|
 | REGISTRAR_RECIBO   | loop ReAct de `ExpenseAgent.run` (historial, rieles, juez*)   | sí    |
-| CONSULTAR_GASTOS   | una llamada `generate_text` con `QUERY_PROMPT_v1` y el        | no    |
+| CONSULTAR_GASTOS   | una llamada `generate_text` con `QUERY_PROMPT_v2` y el        | no    |
 |                    | `AgentState` serializado como DATO                            |       |
-| CONVERSACION       | una llamada `generate_text` con `CHAT_PROMPT_v1`              | no    |
+| CONVERSACION       | una llamada estructurada con `CHAT_PROMPT_v2` ({respuesta,    | no    |
+|                    | nombre_usuario}); un nombre válido va al `AgentState`         |       |
 | FUERA_DE_ALCANCE   | texto fijo de rechazo en código, sin llamada al LLM           | no    |
 
 (*) el juez es de la Etapa 11.
+
+Memoria avanzada (Etapa 10): `handle` usa un `AgentState` por conversación (si no se entrega
+uno, crea uno nuevo y lo devuelve en `AssistantResult.state`). El código lo actualiza (ver
+`app/memory.py`): el nombre desde CONVERSACION y los totales, los últimos gastos y los
+recibos registrados cuando `registrar_gasto` confirma la escritura. El router recibe el tipo de la
+confirmación pendiente como contexto (`ROUTER_PROMPT_v2`), de modo que "sí, regístralo de todas
+formas" sin imagen continúa el registro; no hay ninguna regla de código sobre la etiqueta.
 
 Las tools solo existen en la ruta REGISTRAR_RECIBO: las demás rutas no declaran ninguna,
 y las pruebas verifican cero eventos `TOOL_CALL` en ellas. El router no es un filtro de
@@ -41,9 +49,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from pydantic import BaseModel, ValidationError
+
 from app.agent import STOP_EMPTY, STOP_LLM_ERROR, ExpenseAgent, ToolFn
 from app.conversation import Conversation
-from app.llm import ANSWER_TEMPERATURE, LLMCallError, LLMClient
+from app.llm import ANSWER_TEMPERATURE, LLMCallError, LLMClient, LLMResult
+from app.memory import set_user_name, total_general, valid_user_name
 from app.models import AgentState, EventType
 from app.prompts import SECURITY_SCOPE_ID
 from app.router import (
@@ -56,8 +67,30 @@ from app.router import (
 )
 from app.trace import Tracer
 
-CHAT_PROMPT_ID = "CHAT_PROMPT_v1"
-QUERY_PROMPT_ID = "QUERY_PROMPT_v1"
+CHAT_PROMPT_ID = "CHAT_PROMPT_v2"
+QUERY_PROMPT_ID = "QUERY_PROMPT_v2"
+CHAT_SCHEMA_NAME = "ChatOutput"
+
+# JSON Schema de la salida de CONVERSACION. `nombre_usuario` es una cadena y la cadena vacía
+# significa "no dio su nombre" (más portable que un tipo nulo); el código acepta también `null`.
+CHAT_JSON_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "respuesta": {"type": "string", "description": "Texto que verá el usuario."},
+        "nombre_usuario": {
+            "type": "string",
+            "description": "Nombre dado en este mensaje; cadena vacía si no lo dio.",
+        },
+    },
+    "required": ["respuesta", "nombre_usuario"],
+}
+
+
+class ChatOutput(BaseModel):
+    """Salida esperada de CONVERSACION, validada de nuevo en código."""
+
+    respuesta: str
+    nombre_usuario: Optional[str] = None
 
 STOP_QUERY = "ruta_consulta"
 STOP_CHAT = "ruta_conversacion"
@@ -91,6 +124,7 @@ class AssistantResult:
     tool_calls: list[dict[str, Any]] = field(default_factory=list)  # {name, args, ok, executed}
     stop_reason: str = ""
     decision: Optional[RouteDecision] = None
+    state: Optional[AgentState] = None  # memoria de la conversación (la entregada o una nueva)
 
     @property
     def tool_sequence(self) -> list[str]:
@@ -129,13 +163,39 @@ def text_history(contents: list[Any]) -> list[Any]:
     ]
 
 
+def _neutralize(text: str) -> str:
+    return text.replace("<", "‹").replace(">", "›")
+
+
 def build_query_message(question: str, state: AgentState) -> str:
-    """Mensaje de consulta: el estado y la pregunta como datos delimitados."""
-    safe_question = question.replace("<", "‹").replace(">", "›")
+    """Mensaje de consulta: el estado, el total calculado por código y la pregunta, como datos.
+
+    Las cifras salen del `AgentState` que el código mantiene; el LLM solo las redacta. El total
+    general se calcula aquí para que el modelo no tenga que sumar.
+    """
+    total = total_general(state)
+    total_text = str(int(total)) if float(total).is_integer() else str(total)
     return (
-        f"<estado_json>{state.model_dump_json()}</estado_json>\n"
-        f"<pregunta_usuario>{safe_question}</pregunta_usuario>"
+        f"<estado_json>{_neutralize(state.model_dump_json())}</estado_json>\n"
+        f"<total_general_clp>{total_text}</total_general_clp>\n"
+        f"<pregunta_usuario>{_neutralize(question)}</pregunta_usuario>"
     )
+
+
+def parse_chat_result(result: LLMResult) -> tuple[Optional[str], Optional[str]]:
+    """`(respuesta, nombre_propuesto)` de la salida de CONVERSACION; `(None, None)` si no sirve.
+
+    Tolera un texto plano (el modelo no devolvió JSON) siempre que no parezca un JSON roto.
+    """
+    if result.json_error is not None:
+        text = (result.text or "").strip()
+        return (text, None) if text and not text.startswith(("{", "[")) else (None, None)
+    try:
+        output = ChatOutput.model_validate(result.data)
+    except ValidationError:
+        return None, None
+    answer = output.respuesta.strip()
+    return (answer or None), output.nombre_usuario
 
 
 class ExpenseAssistant:
@@ -167,17 +227,33 @@ class ExpenseAssistant:
             user_text: texto del usuario.
             image_path: ruta de la imagen adjunta (solo la usa REGISTRAR_RECIBO).
             conversation: historial compartido por todas las rutas.
-            state: `AgentState` que lee CONSULTAR_GASTOS (vacío por defecto). La Etapa 9 no
-                lo actualiza: las actualizaciones de memoria son de la Etapa 10.
+            state: `AgentState` de la conversación. Si se omite se crea uno vacío, que se
+                devuelve en `AssistantResult.state` para reutilizarlo. Lo actualiza el código
+                (Etapa 10) y lo lee CONSULTAR_GASTOS.
             tracer: sobrescribe el del constructor.
         """
         llm = self.llm or LLMClient(tracer=tracer or self.tracer)
         tracer = tracer or self.tracer or llm.tracer
         llm.tracer = tracer  # LLM_DECISION y RETRY quedan en la misma traza
         user_text = user_text or ""
+        state = state if state is not None else AgentState()
+        result = self._handle(user_text, image_path, conversation, state, llm, tracer)
+        result.state = state
+        return result
 
+    def _handle(
+        self,
+        user_text: str,
+        image_path: Optional[str | Path],
+        conversation: Optional[Conversation],
+        state: AgentState,
+        llm: LLMClient,
+        tracer: Tracer,
+    ) -> AssistantResult:
+        pending = state.confirmacion_pendiente
         decision = route_message(
-            user_text, image_path is not None, self._recent_context(conversation), llm, tracer
+            user_text, image_path is not None, self._recent_context(conversation), llm, tracer,
+            pending_confirmation=pending.tipo if pending is not None else None,
         )
         if decision.ruta == REGISTRAR_RECIBO:
             agent_kwargs: dict[str, Any] = {"llm": llm, "tracer": tracer,
@@ -185,7 +261,8 @@ class ExpenseAssistant:
             if self.max_steps is not None:
                 agent_kwargs["max_steps"] = self.max_steps
             result = ExpenseAgent(**agent_kwargs).run(
-                user_text, image_path, tracer=tracer, llm=llm, conversation=conversation
+                user_text, image_path, tracer=tracer, llm=llm, conversation=conversation,
+                state=state,
             )
             return AssistantResult(
                 REGISTRAR_RECIBO, result.final_text, result.tool_calls, result.stop_reason, decision
@@ -194,12 +271,11 @@ class ExpenseAssistant:
             return self._answer(
                 decision, llm, tracer, conversation, user_text, image_path is not None,
                 prompt_id=QUERY_PROMPT_ID, stop_ok=STOP_QUERY,
-                request_text=build_query_message(user_text, state or AgentState()),
+                request_text=build_query_message(user_text, state),
             )
         if decision.ruta == CONVERSACION and not decision.fallback:
-            return self._answer(
-                decision, llm, tracer, conversation, user_text, image_path is not None,
-                prompt_id=CHAT_PROMPT_ID, stop_ok=STOP_CHAT, request_text=user_text,
+            return self._chat(
+                decision, llm, tracer, conversation, state, user_text, image_path is not None
             )
         return self._fixed(decision, tracer, conversation, user_text, image_path is not None)
 
@@ -259,6 +335,43 @@ class ExpenseAssistant:
             return self._finish(decision, tracer, conversation, stored, generated.text.strip(),
                                 stop_ok)
         return self._finish(decision, tracer, conversation, stored, EMPTY_ANSWER_TEXT, STOP_EMPTY)
+
+    def _chat(
+        self, decision: RouteDecision, llm: LLMClient, tracer: Tracer,
+        conversation: Optional[Conversation], state: AgentState, user_text: str, has_image: bool,
+    ) -> AssistantResult:
+        """CONVERSACION: salida estructurada {respuesta, nombre_usuario}, sin tools.
+
+        Si el usuario dio su nombre y el código lo valida (`valid_user_name`), se guarda en el
+        estado con un evento `MEMORY_UPDATE`. A la respuesta se le muestra el nombre ya guardado.
+        """
+        from google.genai import types
+
+        prior = text_history(list(conversation.contents)) if conversation is not None else []
+        self._record_input(tracer, decision, user_text, has_image, conversation, len(prior))
+        stored = user_text if user_text.strip() else IMAGE_NOTE
+        known = (
+            f"<nombre_usuario_conocido>{_neutralize(state.nombre_usuario)}</nombre_usuario_conocido>\n"
+            if state.nombre_usuario
+            else ""
+        )
+        sent = known + user_text + (f"\n{IMAGE_NOTE}" if has_image else "")
+        contents = [*prior, types.Content(role="user", parts=[types.Part(text=sent)])]
+        try:
+            generated = llm.generate_structured(
+                CHAT_PROMPT_ID, contents, CHAT_JSON_SCHEMA, CHAT_SCHEMA_NAME,
+                temperature=ANSWER_TEMPERATURE,
+            )
+        except LLMCallError:
+            return self._finish(decision, tracer, conversation, stored, LLM_ERROR_TEXT,
+                                STOP_LLM_ERROR)
+        answer, proposed = parse_chat_result(generated)
+        if answer is None:
+            return self._finish(decision, tracer, conversation, stored, EMPTY_ANSWER_TEXT, STOP_EMPTY)
+        name = valid_user_name(proposed, user_text) if proposed else None
+        if name:
+            set_user_name(state, name, tracer=tracer)
+        return self._finish(decision, tracer, conversation, stored, answer, STOP_CHAT)
 
     def _fixed(
         self, decision: RouteDecision, tracer: Tracer, conversation: Optional[Conversation],

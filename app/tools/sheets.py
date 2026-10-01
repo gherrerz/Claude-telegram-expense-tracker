@@ -8,6 +8,9 @@ Reglas (aplicadas en código, no en el prompt):
 - Repetible con seguridad (mecanismo del bono): antes de escribir se leen las
   filas existentes y, si ya hay una con la misma fecha, comercio normalizado y
   monto, no se escribe y se devuelve `duplicate=True` con la fila existente.
+  Por defecto SIEMPRE rige. Solo `permitir_duplicado=True` (Etapa 10) omite esa
+  comprobación, y el agente lo pasa únicamente tras una confirmación explícita del
+  usuario en un turno posterior (ver `app/agent.py`); nunca lo decide el LLM.
 - `row_number` sale de `updates.updatedRange` de la respuesta de la API; nunca
   se calcula contando filas antes de escribir.
 - Nunca lanza excepciones al agente: devuelve `SheetResult(success=False, error=...)`
@@ -198,6 +201,7 @@ def registrar_gasto(
     service: Optional[Any] = None,
     tracer: Optional[Tracer] = None,
     settings: Optional[Settings] = None,
+    permitir_duplicado: bool = False,
 ) -> SheetResult:
     """Agrega un gasto a la planilla de prueba, validando antes y sin duplicar.
 
@@ -210,6 +214,9 @@ def registrar_gasto(
         service: cliente de Sheets v4; si se omite se crea con el token OAuth local.
         tracer: trazador; por defecto uno silencioso.
         settings: configuración; si se omite se lee del entorno.
+        permitir_duplicado: con `True` (solo ese valor exacto) se omite la deduplicación y la
+            fila se agrega aunque ya exista una equivalente. Por defecto `False`: la llamada
+            sigue siendo idempotente. La validación de los datos no se omite nunca.
 
     Returns:
         `SheetResult`. Éxito: `success=True` y `row_number` tomado de la API.
@@ -226,6 +233,7 @@ def registrar_gasto(
             "monto": monto if isinstance(monto, (int, float, str)) else str(type(monto).__name__),
             "categoria": categoria if isinstance(categoria, str) else str(type(categoria).__name__),
             "recibo_url": recibo_url if isinstance(recibo_url, str) else str(type(recibo_url).__name__),
+            **({"permitir_duplicado": True} if permitir_duplicado is True else {}),
         },
     )
 
@@ -258,12 +266,14 @@ def registrar_gasto(
         except Exception:  # noqa: BLE001 - no se filtran detalles internos
             return fail("No se pudo crear el cliente de Sheets con las credenciales locales.")
 
-    try:
-        existing_row = find_duplicate_row(_read_rows(service, settings.sheet_id), row)
-    except HttpError as error:
-        return fail(_http_error_message(error))
-    except Exception as error:  # noqa: BLE001 - red u otros fallos: solo el tipo
-        return fail(f"Falló la lectura de la planilla ({type(error).__name__}).")
+    existing_row: Optional[int] = None
+    if permitir_duplicado is not True:  # solo el valor exacto True omite la deduplicación
+        try:
+            existing_row = find_duplicate_row(_read_rows(service, settings.sheet_id), row)
+        except HttpError as error:
+            return fail(_http_error_message(error))
+        except Exception as error:  # noqa: BLE001 - red u otros fallos: solo el tipo
+            return fail(f"Falló la lectura de la planilla ({type(error).__name__}).")
     if existing_row is not None:
         return finish(
             SheetResult(

@@ -100,13 +100,39 @@ class TraceEvent(BaseModel):
     step: Optional[int] = None
 
 
+class PendingConfirmation(BaseModel):
+    """Confirmación que el código le pide al usuario antes de registrar un recibo (Etapa 10).
+
+    Se crea cuando un riel bloquea el registro (recibo duplicado o extracción poco fiable) y
+    solo se acepta en un turno POSTERIOR al que la creó. La ruta de la imagen se conserva
+    para poder confirmar con texto solamente, pero no se serializa (ni hacia el LLM ni hacia
+    la traza).
+    """
+
+    tipo: Literal["duplicado", "baja_confianza"]
+    clave: str  # huella del recibo (hash de la imagen + campos normalizados)
+    imagen_hash: Optional[str] = None
+    datos: dict[str, Any] = Field(default_factory=dict)  # `ReceiptData` analizado, como dict
+    turno: int  # `Conversation.turn` en que se pidió la confirmación
+    fila_existente: Optional[int] = None  # solo para "duplicado", si se conoce
+    imagen_id: Optional[str] = None
+    imagen: Optional[str] = Field(default=None, exclude=True)  # ruta local; nunca sale del código
+
+
 class AgentState(BaseModel):
-    """Estado de memoria del agente (solo estructura)."""
+    """Estado de memoria del agente, distinto del historial bruto de mensajes.
+
+    Lo actualiza el código a partir de resultados observados (ver `app/memory.py`), no lo
+    que diga el LLM. Vive en memoria, una instancia por conversación (sin persistencia).
+    """
 
     nombre_usuario: Optional[str] = None
     totales_por_categoria: dict[str, float] = Field(default_factory=dict)
     ultimos_gastos: list[dict[str, Any]] = Field(default_factory=list)
     recibos_registrados: list[str] = Field(default_factory=list)
+    # Etapa 10: fila de la planilla del primer registro de cada huella, y confirmación pendiente.
+    filas_por_recibo: dict[str, int] = Field(default_factory=dict)
+    confirmacion_pendiente: Optional[PendingConfirmation] = None
 
     @field_validator("ultimos_gastos")
     @classmethod

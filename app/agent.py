@@ -20,6 +20,27 @@ Condiciones de parada (evento `STOP`, campo `reason`):
 - `error_llm`: la API falló tras agotar los reintentos.
 - `respuesta_vacia`: el LLM no devolvió texto ni llamadas.
 
+Memoria avanzada (Etapa 10): con `run(..., state=AgentState())` el código actualiza el estado a
+partir de lo que observa (nunca de lo que diga el LLM) y aplica dos rieles más:
+
+- Duplicados. Tras `analizar_recibo` se calcula la huella del recibo (hash de la imagen + campos).
+  Si ya está en `state.recibos_registrados`, la observación informa `posible_duplicado` con la
+  fila existente, queda una confirmación pendiente (`duplicado`) y `guardar_recibo` y
+  `registrar_gasto` se bloquean para ese recibo. La confianza baja deja una pendiente
+  `baja_confianza` (solo bloquea `registrar_gasto`, como en la Etapa 6).
+- Confirmación del usuario. `confirmado_por_usuario=true` solo se acepta si el estado tiene una
+  confirmación pendiente de un turno ANTERIOR (`pendiente.turno < Conversation.turn`) para el
+  mismo recibo. Dentro del mismo turno se rechaza con un error como observación. En el turno de
+  confirmación, si el usuario no reenvía la imagen, el agente restaura el análisis y la imagen
+  pendientes y se los entrega al LLM en un bloque `<confirmacion_pendiente>`, de modo que se
+  confirma solo con texto ("sí, regístralo de todas formas") sin volver a llamar a
+  `analizar_recibo`. Un duplicado confirmado llama a Sheets con `permitir_duplicado=True`; el
+  LLM no controla ese parámetro. Sin `Conversation` el turno es siempre 1: no hay confirmación.
+- Tras una escritura exitosa (no duplicada) se llama a `record_expense` y se borra la
+  confirmación pendiente. Si la planilla reporta un duplicado (Etapa 5) NO se registra como gasto
+  nuevo: se informa la fila existente y queda una pendiente `duplicado` para que el usuario pueda
+  confirmarlo en un turno posterior. Sin `state` el comportamiento es el de las Etapas 6 a 9.
+
 Historial (Etapa 7): con `run(..., conversation=Conversation())` el agente antepone
 al turno TODOS los mensajes previos y, al terminar, agrega a la conversación lo
 nuevo de la ejecución (mensaje del usuario, contenido del modelo sin modificar,
@@ -33,6 +54,7 @@ comportamiento es el de un solo turno (Etapa 6).
 """
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -40,13 +62,31 @@ from typing import Any, Callable, Optional
 
 from app.conversation import Conversation
 from app.llm import AGENT_TEMPERATURE, LLMCallError, LLMClient
-from app.models import ALLOWED_CATEGORIES, CONFIDENCE_THRESHOLD, UNKNOWN, EventType, ReceiptData, TraceEvent
+from app.memory import (
+    build_key,
+    clear_pending_confirmation,
+    existing_row,
+    image_hash,
+    is_duplicate,
+    record_expense,
+    same_receipt,
+    set_pending_confirmation,
+)
+from app.models import (
+    ALLOWED_CATEGORIES,
+    CONFIDENCE_THRESHOLD,
+    UNKNOWN,
+    AgentState,
+    EventType,
+    ReceiptData,
+    TraceEvent,
+)
 from app.prompts import SECURITY_SCOPE_ID
 from app.security import sanitize_failure, sanitize_observation
 from app.trace import Tracer
 
 MAX_STEPS = 6
-AGENT_PROMPT_ID = "AGENT_PROMPT_v2"
+AGENT_PROMPT_ID = "AGENT_PROMPT_v3"
 IMAGE_ID = "img_1"  # identificador de la imagen sin conversación; el LLM nunca recibe bytes
 
 STOP_FINAL = "respuesta_final"
@@ -55,6 +95,15 @@ STOP_LLM_ERROR = "error_llm"
 STOP_EMPTY = "respuesta_vacia"
 
 ToolFn = Callable[..., dict[str, Any]]
+
+
+_CONFIRMED_PROPERTY = {
+    "type": "boolean",
+    "description": (
+        "true solo si el usuario confirmó el registro en el mensaje ACTUAL, respondiendo a una "
+        "pregunta de confirmación hecha en un mensaje anterior. El código rechaza cualquier otro uso."
+    ),
+}
 
 
 def build_tool_declarations() -> list[Any]:
@@ -80,13 +129,15 @@ def build_tool_declarations() -> list[Any]:
             name="guardar_recibo",
             description=(
                 "Sube la imagen adjunta a la carpeta de prueba de Google Drive y devuelve su "
-                "web_view_link. Requiere haber analizado el recibo antes."
+                "web_view_link. Requiere haber analizado el recibo antes. Para un recibo ya "
+                "registrado (posible duplicado) se bloquea hasta que el usuario confirme."
             ),
             parameters_json_schema={
                 "type": "object",
                 "properties": {
                     "comercio": {"type": "string", "description": "Comercio extraído del recibo."},
                     "fecha": {"type": "string", "description": "Fecha ISO AAAA-MM-DD del recibo."},
+                    "confirmado_por_usuario": _CONFIRMED_PROPERTY,
                 },
                 "required": ["comercio", "fecha"],
             },
@@ -95,7 +146,9 @@ def build_tool_declarations() -> list[Any]:
             name="registrar_gasto",
             description=(
                 "Agrega una fila de gasto a la planilla de prueba de Google Sheets. Solo agrega; "
-                "recibo_url debe ser el web_view_link devuelto por guardar_recibo."
+                "recibo_url debe ser el web_view_link devuelto por guardar_recibo. Se bloquea si "
+                "el recibo es un posible duplicado o la extracción es poco fiable, hasta que el "
+                "usuario confirme."
             ),
             parameters_json_schema={
                 "type": "object",
@@ -105,6 +158,7 @@ def build_tool_declarations() -> list[Any]:
                     "monto": {"type": "number", "description": "Total pagado, positivo."},
                     "categoria": {"type": "string", "enum": list(ALLOWED_CATEGORIES)},
                     "recibo_url": {"type": "string", "description": "web_view_link de guardar_recibo."},
+                    "confirmado_por_usuario": _CONFIRMED_PROPERTY,
                 },
                 "required": ["fecha", "comercio", "monto", "categoria", "recibo_url"],
             },
@@ -147,6 +201,13 @@ class _RunContext:
     analysis: Optional[ReceiptData] = None
     drive_links: set[str] = field(default_factory=set)
     registered_row: Optional[int] = None
+    # Memoria avanzada (Etapa 10); sin `state` todo esto queda inactivo.
+    state: Optional[AgentState] = None
+    turn: int = 1
+    tracer: Optional[Tracer] = None  # recibe los MEMORY_UPDATE
+    image_hash: Optional[str] = None
+    analysis_key: Optional[str] = None  # huella del recibo analizado (o restaurado)
+    confirmed_key: Optional[str] = None  # huella cuya confirmación ya se validó en esta ejecución
 
 
 def _needs_confirmation(receipt: ReceiptData) -> Optional[str]:
@@ -235,12 +296,162 @@ class _Dispatcher:
             )
         self.ctx.analysis = receipt
         reason = _needs_confirmation(receipt)
-        return {
+        observation: dict[str, Any] = {
             "ok": True,
             "datos": receipt.model_dump(),
             "requiere_confirmacion": reason is not None,
             "motivo": reason,
         }
+        if self.ctx.state is not None:
+            self._identify_receipt(receipt)
+            duplicate, row = self._duplicate_info()
+            if duplicate:
+                where = f"en la fila {row}" if row is not None else "en esta conversación"
+                notice = (
+                    f"posible_duplicado: este recibo ya fue registrado {where}; "
+                    "pide confirmación al usuario antes de registrarlo de nuevo"
+                )
+                self._ensure_pending("duplicado", row)
+                observation.update(
+                    posible_duplicado=True,
+                    fila_existente=row,
+                    requiere_confirmacion=True,
+                    motivo=notice if reason is None else f"{notice}; además: {reason}",
+                )
+            elif reason is not None:
+                self._ensure_pending("baja_confianza")
+        return observation
+
+    # -- memoria avanzada (Etapa 10) ---------------------------------------------
+    def _identify_receipt(self, receipt: ReceiptData) -> None:
+        """Calcula el hash de la imagen y la huella del recibo analizado."""
+        ctx = self.ctx
+        ctx.image_hash = None
+        if ctx.image_path is not None:
+            try:
+                ctx.image_hash = image_hash(ctx.image_path.read_bytes())
+            except OSError:
+                ctx.image_hash = None  # sin imagen legible la huella solo usa los campos
+        ctx.analysis_key = build_key(ctx.image_hash, receipt.comercio, receipt.fecha, receipt.monto)
+
+    def _duplicate_info(self) -> tuple[bool, Optional[int]]:
+        """`(es_duplicado, fila_existente)` del recibo analizado según la memoria.
+
+        Cuenta como duplicado un recibo ya registrado o uno que la planilla ya reportó como
+        repetido (pendiente `duplicado` del mismo recibo).
+        """
+        state, key = self.ctx.state, self.ctx.analysis_key
+        if state is None or key is None:
+            return False, None
+        if is_duplicate(state, key):
+            return True, existing_row(state, key)
+        pending = state.confirmacion_pendiente
+        if pending is not None and pending.tipo == "duplicado" and same_receipt(pending.clave, key):
+            return True, pending.fila_existente
+        return False, None
+
+    def _ensure_pending(self, kind: str, row: Optional[int] = None) -> None:
+        """Deja (o conserva) la confirmación pendiente del recibo analizado."""
+        ctx = self.ctx
+        if ctx.state is None or ctx.analysis is None or ctx.analysis_key is None:
+            return
+        set_pending_confirmation(
+            ctx.state,
+            kind,  # type: ignore[arg-type]
+            ctx.analysis_key,
+            ctx.analysis.model_dump(),
+            ctx.turn,
+            imagen=str(ctx.image_path) if ctx.image_path is not None else None,
+            imagen_id=ctx.image_id,
+            imagen_hash=ctx.image_hash,
+            fila_existente=row,
+            tracer=ctx.tracer,
+        )
+
+    def _confirmation_gate(self, tool: str, args: dict[str, Any]) -> Optional[dict[str, Any]]:
+        """Riel de confirmación. Devuelve una observación de error si hay que bloquear, o `None`.
+
+        - Sin `state`: solo rige el riel de la Etapa 6 (confianza baja o campos desconocidos
+          bloquean `registrar_gasto`).
+        - Con `state`: un duplicado bloquea `guardar_recibo` y `registrar_gasto`; la confianza
+          baja bloquea `registrar_gasto`. `confirmado_por_usuario=true` desbloquea solo si hay
+          una confirmación pendiente del mismo recibo y tipo creada en un turno ANTERIOR.
+        """
+        ctx = self.ctx
+        analysis = ctx.analysis
+        assert analysis is not None
+        reason = None if tool == "guardar_recibo" else _needs_confirmation(analysis)
+        state = ctx.state
+        duplicate, row = self._duplicate_info()
+        if not duplicate and reason is None:
+            return None
+        if state is None or ctx.analysis_key is None:
+            return {
+                "ok": False,
+                "error": (
+                    f"Registro bloqueado: la extracción necesita confirmación del usuario ({reason}). "
+                    "Pide al usuario que confirme o aclare los datos."
+                ),
+            }
+        key = ctx.analysis_key
+        kind = "duplicado" if duplicate else "baja_confianza"
+        if ctx.confirmed_key is not None and same_receipt(ctx.confirmed_key, key):
+            return None  # la confirmación ya se validó en esta ejecución
+        pending = state.confirmacion_pendiente
+        valid = pending is not None and pending.tipo == kind and same_receipt(pending.clave, key)
+        if args.get("confirmado_por_usuario") is True and valid:
+            assert pending is not None
+            if pending.turno >= ctx.turn:
+                return {
+                    "ok": False,
+                    "error": (
+                        "Confirmación rechazada: la confirmación debe venir del usuario en un mensaje "
+                        "posterior al que la pidió, no en el mismo mensaje. Responde al usuario "
+                        "pidiéndola y espera su respuesta."
+                    ),
+                }
+            ctx.confirmed_key = key
+            return None
+        self._ensure_pending(kind, row)
+        if duplicate:
+            where = f"en la fila {row}" if row is not None else "en esta conversación"
+            detail = f"posible_duplicado: este recibo ya fue registrado {where}"
+        else:
+            detail = f"la extracción necesita confirmación del usuario ({reason})"
+        rejected = (
+            "Confirmación rechazada: no hay una confirmación pendiente de un mensaje anterior "
+            "para este recibo. "
+            if args.get("confirmado_por_usuario") is True
+            else ""
+        )
+        return {
+            "ok": False,
+            "error": (
+                f"{rejected}Registro bloqueado: {detail}. Pide al usuario que confirme; solo en un "
+                "mensaje posterior podrás reintentar con confirmado_por_usuario=true."
+            ),
+        }
+
+    def _remember_expense(self, args: dict[str, Any], row_number: int) -> None:
+        """Actualiza la memoria con el gasto que la planilla confirmó y borra la pendiente."""
+        ctx = self.ctx
+        if ctx.state is None or ctx.analysis is None:
+            return
+        try:
+            receipt = ReceiptData(
+                fecha=args["fecha"],
+                comercio=args["comercio"],
+                monto=float(args["monto"]),
+                categoria=args["categoria"],
+                confianza=ctx.analysis.confianza,
+            )
+            record_expense(ctx.state, receipt, ctx.image_hash, row_number, tracer=ctx.tracer)
+            # Un registro exitoso cierra cualquier confirmación en espera.
+            clear_pending_confirmation(
+                ctx.state, tracer=ctx.tracer, motivo="el gasto se registró en la planilla"
+            )
+        except Exception as error:  # noqa: BLE001 - la planilla ya escribió; solo el tipo en la traza
+            self.last_diagnostic = f"no se pudo actualizar la memoria ({type(error).__name__})"
 
     def _do_guardar_recibo(self, args: dict[str, Any]) -> dict[str, Any]:
         problem = self._image_error()
@@ -248,6 +459,9 @@ class _Dispatcher:
             return problem
         if self.ctx.analysis is None:
             return {"ok": False, "error": "Primero hay que analizar el recibo con analizar_recibo."}
+        blocked = self._confirmation_gate("guardar_recibo", args)
+        if blocked is not None:
+            return blocked
         if "guardar_recibo" in self.overrides:
             result = self.overrides["guardar_recibo"](
                 self.ctx.image_path, args["comercio"], args["fecha"]
@@ -279,15 +493,9 @@ class _Dispatcher:
         # Rieles de código: valen aunque el LLM ignore el prompt.
         if self.ctx.analysis is None:
             return {"ok": False, "error": "Primero hay que analizar el recibo con analizar_recibo."}
-        reason = _needs_confirmation(self.ctx.analysis)
-        if reason is not None:
-            return {
-                "ok": False,
-                "error": (
-                    f"Registro bloqueado: la extracción necesita confirmación del usuario ({reason}). "
-                    "Pide al usuario que confirme o aclare los datos."
-                ),
-            }
+        blocked = self._confirmation_gate("registrar_gasto", args)
+        if blocked is not None:
+            return blocked
         if args["recibo_url"] not in self.ctx.drive_links:
             return {
                 "ok": False,
@@ -306,6 +514,10 @@ class _Dispatcher:
             categoria=args["categoria"],
             recibo_url=args["recibo_url"],
         )
+        # Un duplicado solo llega hasta aquí si el usuario lo confirmó (ver `_confirmation_gate`):
+        # solo entonces, y solo el código, pide a la planilla omitir su deduplicación.
+        if self._duplicate_info()[0]:
+            kwargs["permitir_duplicado"] = True
         if "registrar_gasto" in self.overrides:
             result = self.overrides["registrar_gasto"](**kwargs)
         else:
@@ -314,17 +526,62 @@ class _Dispatcher:
             result = registrar_gasto(**kwargs, tracer=Tracer(console=False, write_file=False))
         if result.success and result.row_number is not None:
             self.ctx.registered_row = result.row_number
+            self._remember_expense(args, result.row_number)
         if not result.success and not result.duplicate:
             observation, self.last_diagnostic = sanitize_failure(
                 "registrar_gasto", result.error, row_number=None, duplicate=False
             )
             return observation
-        return {
+        observation = {
             "ok": result.success,
             "row_number": result.row_number,
             "duplicate": result.duplicate,
             "error": result.error,
         }
+        if result.duplicate and self.ctx.state is not None:
+            # La planilla ya tiene la fila: no es un gasto nuevo, pero el usuario puede
+            # confirmarlo en un turno posterior.
+            self._ensure_pending("duplicado", result.row_number)
+            observation["requiere_confirmacion"] = True
+        return observation
+
+
+def _restore_pending(ctx: _RunContext) -> str:
+    """Restaura el análisis y la imagen de una confirmación pendiente (turno sin imagen nueva).
+
+    Permite confirmar solo con texto: el contexto de la ejecución recupera el recibo ya analizado
+    y su imagen, y se devuelve el bloque de datos `<confirmacion_pendiente>` que se agrega al
+    mensaje del usuario. Devuelve "" si no hay nada que restaurar.
+    """
+    state = ctx.state
+    pending = state.confirmacion_pendiente if state is not None else None
+    if pending is None or not pending.imagen or not Path(pending.imagen).is_file():
+        return ""
+    try:
+        analysis = ReceiptData.model_validate(pending.datos)
+    except Exception:  # noqa: BLE001 - datos corruptos: no se restaura
+        return ""
+    ctx.image_path = Path(pending.imagen)
+    ctx.image_id = pending.imagen_id or IMAGE_ID
+    ctx.analysis = analysis
+    ctx.analysis_key = pending.clave
+    ctx.image_hash = pending.imagen_hash
+    block = json.dumps(
+        {
+            "tipo": pending.tipo,
+            "fila_existente": pending.fila_existente,
+            "datos": pending.datos,
+            "image_id": ctx.image_id,
+        },
+        ensure_ascii=False,
+    )
+    block = block.replace("<", "‹").replace(">", "›")  # los datos no pueden cerrar la etiqueta
+    return (
+        f"\n[Sistema: el mensaje anterior pidió confirmar el registro de un recibo ya analizado "
+        f"(image_id={ctx.image_id}). Si el usuario lo confirma en este mensaje, usa "
+        f"confirmado_por_usuario=true; no vuelvas a llamar analizar_recibo.]\n"
+        f"<confirmacion_pendiente>{block}</confirmacion_pendiente>"
+    )
 
 
 def _safe_max_steps_message(ctx: _RunContext) -> str:
@@ -377,6 +634,7 @@ class ExpenseAgent:
         llm: Optional[LLMClient] = None,
         tool_overrides: Optional[dict[str, ToolFn]] = None,
         conversation: Optional[Conversation] = None,
+        state: Optional[AgentState] = None,
     ) -> AgentResult:
         """Ejecuta el loop para un mensaje del usuario.
 
@@ -393,6 +651,9 @@ class ExpenseAgent:
                 al turno y, al terminar (con cualquier motivo de parada), se le
                 agrega lo nuevo. Sin él, la ejecución es de un solo turno. La
                 instrucción de sistema se envía en cada llamada y NO se guarda.
+            state: memoria avanzada (Etapa 10). Si se entrega, el código la actualiza tras
+                cada registro, frena los duplicados y exige la confirmación del usuario en un
+                turno posterior (ver el docstring del módulo). Sin él, no hay memoria.
         """
         from google.genai import types
 
@@ -408,7 +669,8 @@ class ExpenseAgent:
         image_id = IMAGE_ID
         if conversation is not None and path is not None:
             image_id = conversation.register_image(path)
-        ctx = _RunContext(image_path=path, image_id=image_id)
+        ctx = _RunContext(image_path=path, image_id=image_id, state=state, turn=turn, tracer=tracer)
+        pending_note = _restore_pending(ctx) if path is None else ""
         dispatcher = _Dispatcher(ctx, llm, overrides)
         tools = build_tool_declarations()
 
@@ -416,11 +678,13 @@ class ExpenseAgent:
             EventType.USER_INPUT,
             {"text": user_text, "has_image": path is not None,
              "image_id": image_id if path is not None else None,
-             "turn": turn, "history_messages": len(prior)},
+             "turn": turn, "history_messages": len(prior),
+             **({"restored_pending": state.confirmacion_pendiente.tipo} if pending_note else {})},
         )
         text = user_text
         if path is not None:
             text += f"\n[Adjunto: imagen de un recibo, image_id={image_id}]"
+        text += pending_note
         contents: list[Any] = list(prior)
         contents.append(types.Content(role="user", parts=[types.Part(text=text)]))
 
