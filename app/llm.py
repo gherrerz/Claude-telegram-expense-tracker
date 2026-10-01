@@ -84,6 +84,26 @@ class UsageStats:
     def as_dict(self) -> dict[str, int]:
         return dict(self.__dict__)
 
+    def add(self, name: str, amount: int = 1) -> None:
+        setattr(self, name, getattr(self, name) + amount)
+
+
+# Acumulador de TODAS las instancias de `LLMClient` del proceso (por ejemplo, de una sesión del
+# notebook, donde cada sección crea su propio cliente). Cada cliente suma aquí lo mismo que en su
+# `stats`. Es solo de lectura para quien reporta: `session_stats()` devuelve una copia.
+_SESSION_STATS = UsageStats()
+
+
+def session_stats() -> UsageStats:
+    """Copia de los contadores acumulados por todos los clientes LLM del proceso."""
+    return UsageStats(**_SESSION_STATS.as_dict())
+
+
+def reset_session_stats() -> None:
+    """Pone en cero el acumulador del proceso (para pruebas o para medir un tramo)."""
+    for name in list(_SESSION_STATS.__dict__):
+        setattr(_SESSION_STATS, name, 0)
+
 
 @dataclass
 class ToolCallRequest:
@@ -178,6 +198,11 @@ class LLMClient:
         self._backoff_max = backoff_max
         self._last_attempt_at: Optional[float] = None
         self._call_seq = 0
+
+    def _count(self, name: str, amount: int = 1) -> None:
+        """Suma al contador del cliente y al acumulador del proceso."""
+        self.stats.add(name, amount)
+        _SESSION_STATS.add(name, amount)
 
     # -- configuración perezosa ------------------------------------------------
     def _load(self) -> Settings:
@@ -278,7 +303,7 @@ class LLMClient:
         call_id = self._call_seq
         # Mensajes (`Content`) enviados en la llamada con tools: historial + turno.
         history = {"history_messages": len(contents)} if kind == "tools" else {}
-        self.stats.calls += 1
+        self._count("calls")
         started = self._clock()
         attempts = 0
         while True:
@@ -295,7 +320,7 @@ class LLMClient:
                 retries_done = attempts - 1
                 if self._is_retryable(error) and retries_done < self.max_retries:
                     wait = self._backoff(retries_done + 1)
-                    self.stats.retries += 1
+                    self._count("retries")
                     self.tracer.record(
                         EventType.RETRY,
                         {
@@ -310,7 +335,7 @@ class LLMClient:
                     )
                     self._sleep(wait)
                     continue
-                self.stats.failed_calls += 1
+                self._count("failed_calls")
                 self.tracer.record(
                     EventType.LLM_DECISION,
                     {
@@ -330,10 +355,10 @@ class LLMClient:
 
         latency_ms = int(round((self._clock() - started) * 1000))
         usage = extract_usage(response)
-        self.stats.prompt_tokens += usage["prompt_token_count"]
-        self.stats.output_tokens += usage["candidates_token_count"]
-        self.stats.thinking_tokens += usage["thoughts_token_count"]
-        self.stats.total_tokens += usage["total_token_count"]
+        self._count("prompt_tokens", usage["prompt_token_count"])
+        self._count("output_tokens", usage["candidates_token_count"])
+        self._count("thinking_tokens", usage["thoughts_token_count"])
+        self._count("total_tokens", usage["total_token_count"])
         self.tracer.record(
             EventType.LLM_DECISION,
             {

@@ -1,0 +1,82 @@
+# Checklist final contra la rúbrica
+
+Fuente de la rúbrica: `tarea_final.pdf` (carpeta 6 del curso), transcrita en `docs/curso_referencia.md`, sección 0. Cada criterio base y cada bono declarado tiene su estado, la celda del notebook, la prueba automatizada y la evidencia real localizable.
+
+## Cómo leer este documento
+
+- **Estado:** `CUMPLE` solo donde existe una verificación real registrada en `docs/dev_prompts.md` (con fecha y resultado). `NO CUMPLE` si la verificación falló. `PENDIENTE DE CORRIDA FINAL` si falta la ejecución real que esta etapa debe dejar.
+- **Celda:** «Sección N, celda #k» con `k` el índice de la celda en `notebooks/demo.ipynb`, contando desde 0 todas las celdas (de texto y de código). La última celda del notebook imprime este mismo mapa; las celdas de código con LLM o con Google se omiten con un aviso si falta la configuración.
+- **Pruebas automatizadas:** archivo y nombre de prueba (`pytest -m "not live"`, sin red) y, cuando existe, la prueba `live` y el script `scripts/verify_stage_N.py` que las ejecuta contra la API real.
+- **Evidencia real:** fecha y resultado clave según la bitácora (`docs/dev_prompts.md`); las trazas están en `docs/trace_examples.md`.
+
+Mapa de celdas por sección (notebook de 53 celdas):
+
+| Sección | Celdas | Contenido |
+|---|---|---|
+| Portada | #0 | Índice y criterios |
+| 0 Setup y ficha | #1 a #8 | Variables, trazador, ficha de reproducción, prompts y parámetros vigentes |
+| 1 Caso | #9 a #10 | Caso de uso y criterio de éxito |
+| 2 LLM y prompts | #11 a #18 | Modelo, prompts, recibos sintéticos, llamada real |
+| 3 ReAct | #19 a #22 | Loop, tools, ejecución real |
+| 4 Historial | #23 a #24 | Dos turnos y prueba negativa |
+| 5 Seguridad | #25 a #26 | Alcance y casos adversarios |
+| 6 Router | #27 a #28 | Cuatro rutas |
+| 7 Memoria avanzada | #29 a #32 | Estado, usos y ciclo real |
+| 8 Herramienta de acción | #33 a #40 | Drive, validación y Sheets antes/después |
+| 9 Juez | #41 a #45 | Prompt, veredictos fijos y casos reales |
+| 10 Golden set | #46 a #50 | Validación, resultados y ejecución opcional |
+| Cierre | #51 a #52 | Resumen de consumo y mapa de celdas |
+
+## Base obligatoria (1,0 inicial + hasta 3,0)
+
+| Criterio | Puntos | Estado | Sección y celda del notebook | Pruebas automatizadas | Evidencia real |
+|---|---|---|---|---|---|
+| Caso y criterio de éxito | 0,5 | CUMPLE | Sección 1, celdas #9 (texto del caso y criterio observable) y #10 (muestra `docs/use_case.md` completo) | `tests/test_repo_hygiene.py::test_use_case_covers_rubric_sections`, `::test_use_case_lists_allowed_categories` | Criterio observable ejecutado en el caso GS01 del golden set (2026-10-01): fecha y monto coinciden, la planilla gana 1 fila y la respuesta cita la fila 11 (`eval/results_v1.json`, `docs/evaluation.md`) |
+| LLM real y trazabilidad | 0,5 | CUMPLE | Sección 0, celdas #6 a #8 (ficha, modelo, prompts y parámetros); Sección 2, celdas #12 (modelo y configuración), #14 (prompts versionados) y #18 (llamada real con traza y contadores) | `tests/test_stage3_llm.py::test_system_instruction_includes_security_scope_and_params_sent`, `::test_counters_and_usage_traced`, `::test_retry_on_429_emits_retry_and_succeeds`, `::test_api_key_never_in_trace_output`; `tests/test_stage3_analyzer.py::test_analyzer_parses_valid_response_and_traces`; `tests/test_stage14_session.py::test_session_accumulates_across_clients`; live: `tests/test_stage3_live.py`; script: `scripts/verify_stage_3.py` | 2026-09-30: `verify_stage_3.py` dio `RESULTADO: OK` (8 llamadas, 0 reintentos, 11.805 tokens; `pytest -m live`: 4 passed); notebook con la clave real: 3 llamadas. Traza legible en `docs/trace_examples.md` |
+| ReAct integrado | 1,0 | CUMPLE | Sección 3, celdas #19 (diseño y condiciones de parada), #20 (tools y parámetros) y #22 (ejecución real con secuencia de eventos y motivo de parada) | `tests/test_stage6_agent.py::test_normal_flow_trace_order_and_stop`, `::test_observations_are_fed_back_to_the_llm`, `::test_llm_decides_the_order_code_does_not_force_it`, `::test_stops_at_max_steps_with_safe_answer_and_no_tool_beyond_limit`; live: `tests/test_stage6_live.py`; script: `scripts/verify_stage_6.py` | 2026-10-01: `verify_stage_6.py` OK con Google: `analizar_recibo → guardar_recibo → registrar_gasto`, parada `respuesta_final` en 4 de 6 decisiones, fila 4, 5 llamadas y 0 reintentos; `pytest -m live`: 1 passed |
+| Historial simple | 0,5 | CUMPLE | Sección 4, celdas #23 (diseño y prueba) y #24 (turno 1 «Me llamo Diego», turno 2 con imagen, y prueba negativa sin historial) | `tests/test_stage7_history.py::test_turn_2_request_contains_turn_1_user_text_and_model_reply`, `::test_negative_without_conversation_turn_1_text_is_absent`, `::test_name_is_not_hardcoded_in_app_source`; live: `tests/test_stage7_live.py`; script: `scripts/verify_stage_7.py` | 2026-10-01: `verify_stage_7.py` OK, 8 de 8 comprobaciones y 9 llamadas. Turno 2 recibió 2 mensajes previos y la respuesta empieza con «Diego, …»; sin historial la respuesta no contiene «Diego». `pytest -m live`: 2 passed |
+| Seguridad básica | 0,5 | CUMPLE | Sección 5, celdas #25 (bloque `SECURITY_SCOPE_v2` y rieles) y #26 (cinco casos adversarios con tabla de límites respetados); además Sección 0, celda #8 (el bloque va en toda llamada) | `tests/test_stage8_security.py::test_compose_always_prepends_active_scope_for_every_role`, `::test_scope_is_in_every_public_llm_call_path_and_trace`, `::test_adversarial_text_answered_without_tools_has_zero_tool_calls`, `::test_only_three_tools_are_declared_and_none_can_move_money`; live: `tests/test_stage8_live.py`; script: `scripts/verify_stage_8.py` | 2026-10-01: `verify_stage_8.py` OK (8 llamadas, 0 reintentos): transferencia, borrado, filtrar el prompt y fuera de tema con 0 `TOOL_CALL`; inyección combinada solo con tools permitidas; `SECURITY_SCOPE_v2` en todas las decisiones. `pytest -m live`: 5 passed. Golden set: GS05 y GS07 aprobados |
+
+Suma de la base: 0,5 + 0,5 + 1,0 + 0,5 + 0,5 = 3,0.
+
+## Ampliaciones declaradas (tope +3,0)
+
+| Bono | Puntos | Estado | Sección y celda del notebook | Pruebas automatizadas | Evidencia real |
+|---|---|---|---|---|---|
+| Workflow adicional: router | +1,0 | CUMPLE | Sección 6, celdas #27 (mecanismo, rutas y respaldos) y #28 (cuatro entradas, una por ruta, con el evento `ROUTE` y las tools llamadas) | `tests/test_stage9_router.py::test_router_parses_each_label`, `::test_non_registrar_routes_never_expose_or_call_tools`, `::test_invalid_or_failed_router_output_falls_back_to_the_safe_route`, `::test_registrar_route_runs_the_react_agent_with_tools`; live: `tests/test_stage9_live.py`; script: `scripts/verify_stage_9.py` | 2026-10-01: `verify_stage_9.py` OK (10 llamadas, 0 reintentos): las 4 rutas acertaron sin respaldo y solo `REGISTRAR_RECIBO` ejecutó tools. `pytest -m live`: 4 passed. Golden set: GS08A a GS08D aprobados |
+| Memoria avanzada | +1,0 | CUMPLE | Sección 7, celdas #29 (diseño de `AgentState`), #30 (estado inicial, actualizaciones `MEMORY_UPDATE` y los dos usos, sin red) y #32 (ciclo real con Gemini, Drive y Sheets) | `tests/test_stage10_memory.py::test_full_cycle_initial_state_update_use_duplicate_and_next_turn_confirmation`, `::test_record_expense_sums_totals_caps_recent_expenses_and_emits_memory_update`, `::test_same_turn_self_confirmation_is_rejected_and_nothing_is_written`; live: `tests/test_stage10_live.py`; script: `scripts/verify_stage_10.py` | 2026-10-01: `verify_stage_10.py` OK (18 llamadas, 0 reintentos, 2 escrituras reales): nombre en el estado; fila 5 y total 78.340; consulta «Ana, llevas gastado un total de $78.340…» desde el estado; duplicado detectado con 0 subidas y 0 filas; confirmación en el turno siguiente (fila 6, total 156.680). `pytest -m live`: 1 passed. Golden set: GS09 y GS10 aprobados |
+| Herramienta avanzada de acción | +0,5 | CUMPLE | Sección 8, celdas #33 (mecanismo), #36 (subida real a Drive), #38 (validación sin red de `registrar_gasto`) y #40 (estado ANTES, llamada, estado DESPUÉS y repetición) | `tests/test_stage5_sheets.py::test_valid_append_returns_row_number_from_updated_range`, `::test_validation_failure_makes_zero_api_calls`, `::test_repeat_after_first_append_is_duplicate_and_state_unchanged`; `tests/test_stage4_drive.py`; live: `tests/test_stage5_live.py`, `tests/test_stage4_live.py`; scripts: `scripts/verify_stage_5.py`, `scripts/verify_stage_4.py` | 2026-10-01: `verify_stage_5.py` OK: antes 0 filas, `row_number=2`, después 1 fila que coincide y la repetición quedó `duplicate=True` con el conteo sin cambio. 2026-09-30: `verify_stage_4.py` OK (el `file_id` existe en la carpeta de prueba). `pytest -m live`: 1 passed en cada etapa |
+| Juez LLM | +0,5 | CUMPLE | Sección 9, celdas #41 (diseño, veredictos y decisión aplicada), #42 (prompt `JUDGE_PROMPT_v1`), #43 (efecto de cada veredicto, sin red) y #45 (casos reales: benigno y adversarial con tabla) | `tests/test_stage11_judge.py::test_judge_request_is_independent_structured_temperature_zero_and_scoped`, `::test_aprobar_runs_the_tools_and_the_verdict_precedes_saving`, `::test_the_llm_has_no_way_to_call_or_disable_the_judge`, `::test_judge_prompt_is_registered_and_does_not_duplicate_the_baseline_scope`; live: `tests/test_stage11_live.py`; script: `scripts/verify_stage_11.py` | 2026-10-01: `verify_stage_11.py` OK (14 llamadas, 0 reintentos): benigno `APROBAR` y registrado (fila 9); adversarial `RECHAZAR` (señal `inyeccion_en_imagen`) con 0 ejecuciones y planilla sin cambios; el rechazo se mantiene cuando el usuario insiste. `pytest -m live`: 1 passed. Golden set: GS06 aprobado |
+| Evaluación con golden set | +0,5 | CUMPLE | Sección 10, celdas #46 (diseño y versionado), #47 (validación y casos), #48 (resultados por caso de `eval/results_v1.json`) y #50 (`RUN_EVAL = False` por defecto) | `tests/test_stage12_eval.py::test_golden_set_is_valid`, `::test_golden_set_has_every_required_case`, `::test_every_criterion_type_has_a_pass_and_a_fail_case`, `::test_a_broken_criterion_counts_as_failed_not_skipped`; ejecución: `eval/run_eval.py` | 2026-10-01 (12:53 a 13:08, -03:00): corrida v1 `APROBADA`, 13 de 13 casos, 65 llamadas LLM y 119.912 tokens, sin interrupciones; no hubo fallos que corregir (`docs/evaluation.md`, historial de corridas) |
+| RAG | +1,0 | No declarado | — | — | Justificación en `docs/architecture.md`, sección 11: el caso no necesita un corpus |
+| MCP | +1,0 | No declarado | — | — | Justificación en `docs/architecture.md`, sección 11: el caso no necesita herramientas externas adicionales |
+
+**Aritmética de los bonos.** Se declaran +1,0 + 1,0 + 0,5 + 0,5 + 0,5 = **+3,5** frente al tope de **+3,0** de la rúbrica (`docs/bonos.md`). El +0,5 de margen cubre que algún bono no se acredite (por ejemplo, la herramienta de acción, que no suma si no puede repetirse con seguridad, o el golden set, que no suma si hay ejecuciones faltantes). Cada bono usa un mecanismo distinto (`docs/bonos.md`, «Por qué no hay doble crédito»).
+
+## Penalización: tope 3,0 de la nota final
+
+La rúbrica fija un tope de 3,0 si en la revisión sigue sin funcionar el flujo central (LLM, ReAct, herramienta, devolución de la observación, parada o historial). Los errores anteriores corregidos y verificados no lo activan.
+
+| Condición | Estado | Evidencia |
+|---|---|---|
+| El flujo central funciona **solo con la clave de Gemini**, sin credenciales de Google (decisión A12) | CUMPLE | 2026-10-01: `verify_stage_6.py` sin Google dio `RESULTADO: OK`: `analizar_recibo` corrió de verdad, `guardar_recibo` devolvió el error estructurado como observación, la parada fue `respuesta_final` y el agente informó con honestidad que no pudo registrar. Lo mismo en `verify_stage_7.py`, `verify_stage_8.py` y `verify_stage_9.py` (sin Google por defecto) y en los casos del golden set sin Google (GS02 a GS05, GS07 y GS08; 13 de 13). Pruebas: `tests/test_stage6_agent.py::test_degraded_mode_without_google_returns_error_observation_and_honest_answer`, `tests/test_stage8_security.py::test_real_drive_tool_without_config_is_sanitized` |
+| El notebook corre de principio a fin en un kernel limpio, sin `.env` ni red | CUMPLE | Las celdas con LLM se omiten con `omitido: …` y el resto corre sin errores (`nbconvert --execute` con las variables en blanco, 2026-10-01) |
+| Seguridad basal: una petición fuera de alcance o un jailbreak simple no rompe los límites (si se rompe, solo se pierden los 0,5) | CUMPLE | Fila de Seguridad básica, más GS05 y GS07 del golden set |
+
+## Ejecución final en el notebook
+
+| Elemento | Estado | Qué falta |
+|---|---|---|
+| Ejecución completa de `notebooks/demo.ipynb` con credenciales reales (`nbconvert --execute`), con la celda «Resumen de consumo» | PENDIENTE DE CORRIDA FINAL | La hace el orquestador: guarda la copia ejecutada, revisa que no contenga secretos y completa «Consumo medido» en el `README.md` (marcas `<<MEDIR: …>>`) |
+| Ejecución del notebook con **solo** la clave de Gemini (modo degradado) como prueba de que no se activa el tope 3,0 | PENDIENTE DE CORRIDA FINAL | Misma corrida, con las variables de Google en blanco |
+| Comparación del consumo medido con los límites gratuitos de la cuenta | PENDIENTE DE CORRIDA FINAL | Google no publica cifras fijas por modelo (<https://ai.google.dev/gemini-api/docs/rate-limits>); se compara con los límites que muestra <https://aistudio.google.com/rate-limit> y se registra la fecha |
+| Suite `pytest -m "not live"` completa en verde | PENDIENTE DE CORRIDA FINAL | Al 2026-10-01 queda una falla conocida, que el autor corrige: `.env.example` no declara `TELEGRAM_ALLOWED_CHAT_IDS` (`tests/test_stage2_config.py::test_every_settings_variable_is_declared_in_env_example`) |
+| Prueba manual de la demo de Telegram | Fuera de la evaluación | Pospuesta por decisión del autor; la demo no es evidencia evaluada (`docs/setup_telegram.md`) |
+
+## Notas y límites conocidos
+
+- El bono de memoria no persiste el estado en disco (opcional según la rúbrica y el prompt maestro); un proceso nuevo empieza vacío.
+- La comprobación de que la respuesta no afirma haber transferido o eliminado es una heurística con expresiones regulares y no cubre todas las paráfrasis; la garantía fuerte es estructural (no existe ninguna tool de transferencia o borrado). Ver `docs/bonos.md` y la Etapa 8 en `docs/dev_prompts.md`.
+- El juez usa el mismo modelo que el agente, en una llamada aparte con prompt propio; se declara de forma explícita (`docs/bonos.md`).
+- Las celdas con Google escriben en la carpeta y la planilla de **prueba** y usan recibos sintéticos; no se publica ninguna clave ni dato personal.
+- Si el revisor repite el notebook y se agota el límite diario, puede ejecutarlo por secciones después de la Sección 0 (ver el README).
