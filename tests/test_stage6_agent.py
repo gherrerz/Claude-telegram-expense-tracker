@@ -15,7 +15,7 @@ from app.models import (
     ReceiptData,
     SheetResult,
 )
-from app.prompts import AGENT_PROMPT_v1, SECURITY_SCOPE_v1
+from app.prompts import AGENT_PROMPT_v2, SECURITY_SCOPE_v1
 from app.trace import Tracer
 
 IMAGE = Path(__file__).resolve().parents[1] / "data" / "receipts" / "receipt_normal.jpg"
@@ -153,9 +153,9 @@ def test_agent_call_declares_tools_security_scope_and_temperature():
     assert config.automatic_function_calling.disable is True
     assert config.temperature == AGENT_TEMPERATURE
     assert config.system_instruction.startswith(SECURITY_SCOPE_v1)
-    assert AGENT_PROMPT_v1 in config.system_instruction
+    assert AGENT_PROMPT_v2 in config.system_instruction
     decision = [e for e in tracer.events if e.event_type == EventType.LLM_DECISION][0].data
-    assert decision["system_prompt_id"] == "AGENT_PROMPT_v1"
+    assert decision["system_prompt_id"] == "AGENT_PROMPT_v2"
     assert decision["decision"] == {"type": "final_text"}
     assert decision["params"]["tools"] == declared
 

@@ -109,3 +109,14 @@ La rúbrica pide adjuntar los prompts o instrucciones usados para desarrollar el
   - `pytest -m live tests/test_stage6_live.py`: `1 passed`.
   - Con `AGENT_TEMPERATURE = 0.0` no hubo bucles ni reintentos.
 - **Estado:** COMPLETADA.
+
+### Etapa 7 — Historial simple
+- **Fecha:** 2026-10-01
+- **Modelo de desarrollo:** Claude Code, `claude-opus-5-5` (orquestador) y un subagente `sonnet` (escritor).
+- **Instrucción del autor:** "ok continua".
+- **Prompt aplicado:** `docs/prompt_maestro_v2.md`, sección "ETAPA 7".
+- **Decisiones de diseño:** `Conversation` (`app/conversation.py`) guarda los `Content` del SDK tal como se enviaron y recibieron (el contenido del modelo se agrega sin modificar, para conservar las firmas de pensamiento), el contador de turnos y un registro de imágenes por conversación (`img_1`, `img_2`, ...). `ExpenseAgent.run(..., conversation=conv)` antepone todo el historial al turno y, al terminar, agrega lo nuevo. Sin conversación, el comportamiento es el de la Etapa 6. La instrucción de sistema se envía en cada llamada y no se guarda. El código no extrae ni guarda el nombre: solo viaja en los mensajes reenviados (la memoria estructurada es de la Etapa 10). Con `max_steps`, `error_llm` o `respuesta_vacia` se agrega al historial el texto seguro entregado al usuario (nunca la llamada a tool no ejecutada ni un `Content` vacío), para que los roles sigan alternando. Los rieles de las tools siguen acotados a una ejecución; el `image_id` válido es el de la imagen del turno en curso. La traza agrega `turn` y `history_messages` a `USER_INPUT`, y `history_messages` a `LLM_DECISION`.
+- **Versión de prompt:** `AGENT_PROMPT_v2` agrega una regla para usar el historial y dirigirse al usuario por su nombre si lo dio en la conversación, sin nombrar a nadie en el prompt. `AGENT_PROMPT_v1` se conserva en el registro por trazabilidad y la prueba de la Etapa 6 apunta a la v2.
+- **Resultado:** `app/conversation.py`, cambios en `app/agent.py`, `app/llm.py` y `app/prompts.py`, pruebas offline `tests/test_stage7_history.py` (incluye la verificación de que el nombre no está en `app/`), `tests/test_stage7_live.py`, `scripts/verify_stage_7.py` (sin Google por defecto; `--with-google` opcional) y Sección 4 del notebook. Ver `odd/tasks/etapa-7-history.md`.
+- **Verificación:** pruebas offline y notebook ejecutados sin credenciales. La ejecución real (turno 2 con el nombre y prueba negativa) está pendiente.
+- **Estado:** IMPLEMENTADA — VERIFICACIÓN REAL PENDIENTE.
