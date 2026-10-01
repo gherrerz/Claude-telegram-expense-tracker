@@ -26,6 +26,7 @@ La rúbrica pide adjuntar los prompts o instrucciones usados para desarrollar el
 | A8 | El material del curso está en `../1-…` a `../7-…` (PDF exportados), no en `docs/curso/`. El análisis queda en `docs/curso_referencia.md` y el mapa en `docs/mapa_curso.md`. Es la fuente de verdad sobre la rúbrica: `tarea_final.pdf`, carpeta 6. | Corrige el pendiente de la Etapa 1. |
 | A9 | Versión de Python: **Resuelto: Python 3.12, decisión del autor 2026-09-30.** El equipo tiene 3.12.3 y no tiene 3.11; el curso sugiere 3.12 (`Sesion1-18082026 - 01.pdf`, lám. 65). | A4 asumía un entorno distinto. |
 | A10 | Riesgo de tope 3,0: si el flujo central (ReAct) depende de credenciales de Google y el revisor no las tiene, se activa el tope (TF p.4). **Decisión pendiente antes de la Etapa 4**: cómo degradar Drive y Sheets sin romper el flujo central. | Hallazgo del análisis de la pauta. |
+| A11 | Drive y Sheets usan **OAuth de usuario (cliente de escritorio, `token.json` local)** en lugar de cuenta de servicio. Un único scope, `drive.file`; la carpeta y la planilla de prueba se crean por API con `scripts/setup_google_resources.py`. Variables nuevas: `GOOGLE_OAUTH_CLIENT_SECRETS` y `GOOGLE_OAUTH_TOKEN` (reemplazan a `GOOGLE_APPLICATION_CREDENTIALS`). Con la pantalla de consentimiento en modo Testing, el token caduca a los 7 días. Sustituye lo que el prompt maestro dice sobre la cuenta de servicio en las Etapas 4–5. | Las cuentas de servicio no tienen cuota de almacenamiento ni pueden ser dueñas de archivos ([Drive: unidades compartidas](https://developers.google.com/workspace/drive/api/guides/about-shareddrives)). Scopes: [Drive](https://developers.google.com/workspace/drive/api/guides/api-specific-auth), [Sheets](https://developers.google.com/workspace/sheets/api/scopes), [`spreadsheets.create`](https://developers.google.com/workspace/sheets/api/reference/rest/v4/spreadsheets/create). Caducidad: [OAuth 2.0](https://developers.google.com/identity/protocols/oauth2). Decisión del autor. |
 
 ## Bitácora
 
@@ -63,4 +64,16 @@ La rúbrica pide adjuntar los prompts o instrucciones usados para desarrollar el
 - **Decisión de temperatura:** se mantiene `0.0` en extracción. El modelo la acepta y da el mismo resultado que 1.0, sin bucles.
 - **Corrección:** el cliente desactiva la ejecución automática de funciones del SDK (`AutomaticFunctionCallingConfig(disable=True)`), porque el ciclo ReAct ejecuta las tools de forma explícita.
 - **Incidente:** apareció un `.env` a mitad de la etapa, y una prueba de higiene mostró un fragmento de la clave en la salida del subagente. La clave no quedó en el repositorio. Se recomendó rotar la clave. El autor actualizó `.env` y corrigió `LLM_MODEL`, que figuraba como `gemini-3.5-flash`.
+- **Estado:** COMPLETADA.
+
+### Etapa 4 — Tool guardar_recibo (Google Drive)
+- **Fecha:** 2026-09-30
+- **Modelo de desarrollo:** Claude Code, `claude-opus-5-5` (orquestador) y un subagente `sonnet` (escritor).
+- **Instrucciones del autor:** "mergeá a main y arrancá la Etapa 4" y "sí, OAuth para Drive y Sheets".
+- **Prompt aplicado:** `docs/prompt_maestro_v2.md`, sección "ETAPA 4", con la adenda A11 (OAuth de usuario en lugar de cuenta de servicio).
+- **Decisión (A11):** OAuth de escritorio con el scope mínimo `drive.file`; carpeta y planilla de prueba creadas por API. Fuentes en la tabla de adenda.
+- **Resultado:** `app/google_auth.py`, `app/tools/drive.py` (`guardar_recibo`, `verify_file_exists`), `scripts/google_auth.py`, `scripts/setup_google_resources.py`, `scripts/verify_stage_4.py`, pruebas `tests/test_stage4_drive.py` (offline, servicio falso) y `tests/test_stage4_live.py`, `docs/setup_google.md` y Sección 8 del notebook. Ver `odd/tasks/etapa-4-drive.md`.
+- **Verificación real (2026-09-30, instrucción "listo, ya configuré todo, corré la verificación de la Etapa 4"):**
+  - `scripts/verify_stage_4.py`: `RESULTADO: OK`. Subió `receipt_normal.jpg`; `files.get` confirma que el archivo existe, es `image/jpeg` y está en la carpeta de prueba.
+  - `pytest -m live tests/test_stage4_live.py`: `1 passed`.
 - **Estado:** COMPLETADA.

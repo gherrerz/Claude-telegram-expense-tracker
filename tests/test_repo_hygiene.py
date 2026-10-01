@@ -4,6 +4,7 @@ Verifican que la documentación obligatoria existe y cubre la rúbrica,
 y que no hay secretos versionados.
 """
 import re
+import subprocess
 from pathlib import Path
 
 import nbformat
@@ -25,7 +26,12 @@ REQUIRED_FILES = [
     "notebooks/demo.ipynb",
 ]
 
-SECRET_VARS = ["GEMINI_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS", "TELEGRAM_BOT_TOKEN"]
+SECRET_VARS = [
+    "GEMINI_API_KEY",
+    "GOOGLE_OAUTH_CLIENT_SECRETS",
+    "GOOGLE_OAUTH_TOKEN",
+    "TELEGRAM_BOT_TOKEN",
+]
 
 # Patrones típicos de secretos reales: claves de Google, de OpenRouter/OpenAI,
 # tokens de bots de Telegram y claves privadas.
@@ -34,6 +40,8 @@ SECRET_PATTERNS = [
     re.compile(r"sk-(or-)?[0-9A-Za-z]{20,}"),
     re.compile(r"\b\d{8,10}:[0-9A-Za-z_\-]{35}\b"),
     re.compile(r"-----BEGIN (RSA )?PRIVATE KEY-----"),
+    # Client secret de OAuth de Google.
+    re.compile(r"GOCSPX-[0-9A-Za-z_\-]{20,}"),
 ]
 
 
@@ -94,16 +102,47 @@ def test_gitignore_excludes_secrets():
     assert ".env" in text
     assert "!.env.example" in text
     assert "credentials" in text
+    assert "token.json" in text
+    assert "client_secret" in text
+    assert "secrets/" in text
+
+
+def _candidate_files():
+    """Archivos que git versionaría: rastreados y no ignorados.
+
+    Si git no está disponible, se recorre el árbol completo.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "ls-files", "-co", "--exclude-standard"],
+            cwd=ROOT, capture_output=True, text=True, check=True,
+        ).stdout
+        return [ROOT / line for line in out.splitlines() if line]
+    except (OSError, subprocess.CalledProcessError):
+        return list(ROOT.rglob("*"))
+
+
+def _safe_name(path: Path) -> str:
+    """Ruta relativa con los secretos enmascarados (el nombre podría contenerlos)."""
+    rel = str(path.relative_to(ROOT))
+    for pattern in SECRET_PATTERNS:
+        rel = pattern.sub("***", rel)
+    return rel
 
 
 def test_no_secrets_committed():
-    for path in ROOT.rglob("*"):
+    for path in _candidate_files():
         # Se omiten el entorno virtual y cachés: no son código del proyecto.
         if not path.is_file() or {".git", ".venv", "__pycache__", ".pytest_cache"} & set(path.parts):
             continue
         # `.env` y `.env.*` (salvo `.env.example`) están en .gitignore: contienen
         # los secretos locales del autor y nunca se versionan ni se leen aquí.
         if path.name.startswith(".env") and path.name != ".env.example":
+            continue
+        # Credenciales OAuth locales (también ignoradas por git): no se leen.
+        if path.name == "token.json" or path.name.startswith("client_secret"):
+            continue
+        if "secrets" in path.relative_to(ROOT).parts[:1]:
             continue
         try:
             content = path.read_text(encoding="utf-8")
@@ -112,7 +151,7 @@ def test_no_secrets_committed():
         for pattern in SECRET_PATTERNS:
             # El mensaje no incluye el contenido, solo la ruta.
             if pattern.search(content):
-                pytest.fail(f"Posible secreto en {path.relative_to(ROOT)}", pytrace=False)
+                pytest.fail(f"Posible secreto en {_safe_name(path)}", pytrace=False)
 
 
 def test_notebook_is_valid():

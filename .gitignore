@@ -6,6 +6,8 @@
 *credentials*.json
 *service-account*.json
 secrets/
+token.json
+client_secret*.json
 
 # Artefactos de ejecución
 traces/
@@ -29,3 +31,6 @@ Thumbs.db
 
 # Herramientas locales del agente de desarrollo
 .atl/
+
+# Valores de secretos OAuth usados por error como nombre de archivo
+GOCSPX-*

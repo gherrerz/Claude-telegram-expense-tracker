@@ -28,7 +28,7 @@ Proyecto académico: tarea final del curso de agentes de IA. La entrega evaluada
 | 1 | Caso, criterio de éxito y arquitectura | Entregada |
 | 2 | Proyecto Python base y trazador | Implementada (pendiente de cierre) |
 | 3 | LLM con visión y `analizar_recibo` | Implementada — verificación real pendiente |
-| 4 | `guardar_recibo` (Drive) | Pendiente |
+| 4 | `guardar_recibo` (Drive) | Implementada — verificación real pendiente |
 | 5 | `registrar_gasto` (Sheets) | Pendiente |
 | 6 | Loop ReAct | Pendiente |
 | 7 | Historial simple | Pendiente |
@@ -69,9 +69,20 @@ Copia `.env.example` a `.env` y completa los valores (`LLM_MODEL=gemini-3.5-flas
 
 Con `.env` completo, `pytest -q` también ejecuta las pruebas `live`; para evitarlo usa `pytest -m "not live"`.
 
+### Cómo ejecutar (Etapa 4)
+
+```powershell
+# Una vez: consentimiento OAuth en el navegador y creación de la carpeta de prueba
+.venv\Scripts\python scripts\google_auth.py
+.venv\Scripts\python scripts\setup_google_resources.py
+
+# Verificación real: sube un recibo y confirma el file_id con files.get
+.venv\Scripts\python scripts\verify_stage_4.py
+```
+
 ## Requisitos (previstos)
 - Python 3.12.
-- Cuenta Google con una clave gratuita de Google AI Studio y una cuenta de servicio de Google Cloud con acceso a una carpeta de Drive y una planilla de prueba.
+- Cuenta Google con una clave gratuita de Google AI Studio y un proyecto de Google Cloud con un cliente OAuth de escritorio (OAuth de usuario, scope `drive.file`) para usar una carpeta de Drive y una planilla de prueba. Pasos en [docs/setup_google.md](docs/setup_google.md).
 - Opcional, solo para la demo: un bot de Telegram.
 
 Las variables de entorno están descritas en [.env.example](.env.example).
