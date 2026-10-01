@@ -5,7 +5,7 @@ Cada bono usa un mecanismo distinto para no pedir doble crédito.
 
 | Bono | Puntos | Mecanismo | Dónde se ejecuta (notebook) | Test | Etapa |
 |---|---|---|---|---|---|
-| Workflow adicional: router | +1,0 | Llamada LLM previa que elige 1 de 4 rutas; cada ruta ejecuta un camino distinto. | Sección 6 | `tests/test_router.py` | 9 |
+| Workflow adicional: router | +1,0 | Llamada LLM previa (`ROUTER_PROMPT_v1`, salida JSON `{ruta, motivo}`) que elige 1 de 4 rutas; cada ruta ejecuta un camino distinto con efecto observable en la traza. | Sección 6 | `tests/test_stage9_router.py`, `tests/test_stage9_live.py`, `scripts/verify_stage_9.py` | 9 |
 | Memoria avanzada | +1,0 | `AgentState` estructurado, distinto del historial: estado inicial → actualización → uso en consulta y en detección de duplicados. | Sección 7 | `tests/test_memory.py` | 10 |
 | Herramienta de acción | +0,5 | `registrar_gasto`: agrega una fila en una planilla de prueba; validación en código, solo append y deduplicación; estado antes/después visible. | Sección 8 | `tests/test_stage5_sheets.py`, `tests/test_stage5_live.py` | 5 |
 | Juez LLM | +0,5 | Llamada LLM independiente que emite un veredicto; el código lo aplica antes de `registrar_gasto`. | Sección 9 | `tests/test_judge.py` | 11 |
@@ -16,6 +16,20 @@ Cada bono usa un mecanismo distinto para no pedir doble crédito.
 - **Juez frente a seguridad basal.** El juez es una llamada separada, con su propio prompt (`JUDGE_PROMPT_v1`), que no ve el razonamiento del agente. Su veredicto lo aplica el código, no el LLM del agente. No duplica el prompt basal: verifica la coherencia de los datos frente a la imagen y detecta inyección dentro de ella.
 - **Memoria avanzada frente a historial.** El historial reenvía mensajes (criterio base). `AgentState` es un estado estructurado que se actualiza por eventos y se usa para decidir; no es el historial bruto.
 - **Acción frente a consulta.** `registrar_gasto` modifica estado externo (agrega una fila). `analizar_recibo` es la herramienta básica de consulta del criterio ReAct.
+
+## Router (mecanismo y evidencia)
+Mecanismo (`app/router.py`, `app/assistant.py`):
+- **Clasificación previa.** `route_message` hace una llamada estructurada (enum de 4 etiquetas, temperatura 0.0) antes de cualquier loop y registra el evento `ROUTE` con `ruta`, `motivo`, `fallback` y `has_image`.
+- **Un camino distinto por ruta.** `ExpenseAssistant.handle` despacha: `REGISTRAR_RECIBO` ejecuta el loop ReAct con las tres tools; `CONSULTAR_GASTOS` hace una llamada de texto con el `AgentState` como dato (`QUERY_PROMPT_v1`); `CONVERSACION` hace una llamada de texto (`CHAT_PROMPT_v1`); `FUERA_DE_ALCANCE` devuelve un rechazo fijo en código. Solo la primera declara tools: en las otras tres hay cero eventos `TOOL_CALL`.
+- **Respaldos seguros.** Entrada vacía → `CONVERSACION` sin llamar al LLM; falla del LLM, JSON inválido o etiqueta desconocida → `FUERA_DE_ALCANCE`. Todos con `fallback=true` en la traza.
+- **Distinto de la seguridad basal.** El router decide el flujo; no filtra. `SECURITY_SCOPE_v2` y los rieles de las tools siguen activos en todas las rutas, y la llamada del router también lleva el bloque.
+
+Dónde está la evidencia:
+- Notebook, Sección 6: 4 entradas (una por ruta) con el evento `ROUTE`, las tools llamadas o no y la parada, solo con Gemini configurado.
+- Pruebas offline con un LLM guionado: `tests/test_stage9_router.py`. Prueba real: `tests/test_stage9_live.py` (`-m live`).
+- Script de verificación real: `scripts/verify_stage_9.py` (línea final `RESULTADO`).
+- Estado: la evidencia real queda **pendiente** hasta que se ejecute el script con Gemini. La precisión del router depende del modelo; si una ruta no coincide se informa como falla y no se relaja el criterio.
+- Límite conocido: `CONSULTAR_GASTOS` lee un `AgentState` que hasta la Etapa 10 parte vacío, por lo que responde con honestidad que no hay gastos registrados.
 
 ## Herramienta de acción: `registrar_gasto` (mecanismo y evidencia)
 Mecanismo (`app/tools/sheets.py`), todo aplicado por código y no por el prompt:

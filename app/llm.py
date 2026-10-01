@@ -37,6 +37,16 @@ EXTRACTION_TEMPERATURE = 0.0
 # apareciera un bucle, volver a 1.0 cambiando esta constante.
 AGENT_TEMPERATURE = 0.0
 
+# Temperatura del router (Etapa 9): clasificar es una decisión discreta y debe ser
+# reproducible, así que se usa 0.0 como en la extracción y el agente. El riesgo de bucles
+# que Google describe para Gemini 3 no aplica: es una sola llamada con salida JSON acotada.
+# Si la precisión por ruta bajara en la verificación real, probar 1.0 cambiando esta constante.
+ROUTER_TEMPERATURE = 0.0
+
+# Temperatura de las respuestas directas (CONVERSACION y CONSULTAR_GASTOS, Etapa 9).
+# 0.0 prioriza fidelidad al estado entregado (no inventar cifras) sobre variedad de redacción.
+ANSWER_TEMPERATURE = 0.0
+
 RETRYABLE_CODES = frozenset({429, 503})
 RETRYABLE_STATUSES = frozenset({"RESOURCE_EXHAUSTED", "UNAVAILABLE"})
 BACKOFF_BASE_SECONDS = 2.0

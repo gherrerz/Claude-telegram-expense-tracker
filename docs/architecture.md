@@ -9,11 +9,12 @@ Agente académico que convierte la foto de un recibo en un gasto registrado y ve
 flowchart TD
     U[Usuario] -->|imagen + texto| NB[notebooks/demo.ipynb<br/>entrega evaluada]
     U -.->|demo aparte| TG[app/telegram_bot.py]
-    NB --> RT
-    TG --> RT
+    NB --> AS
+    TG --> AS
 
-    subgraph AG[Agente — app/agent.py]
-        RT[Router LLM<br/>app/router.py] -->|REGISTRAR_RECIBO| RE[Loop ReAct LLM]
+    subgraph AG[Asistente — app/assistant.py]
+        AS[ExpenseAssistant<br/>punto de entrada único] --> RT
+        RT[Router LLM<br/>app/router.py] -->|REGISTRAR_RECIBO| RE[Loop ReAct LLM<br/>app/agent.py]
         RT -->|CONSULTAR_GASTOS| MQ[Respuesta desde memoria]
         RT -->|CONVERSACION| DR[Respuesta directa]
         RT -->|FUERA_DE_ALCANCE| RJ[Rechazo]
@@ -70,8 +71,9 @@ sequenceDiagram
 | Trazador | `app/trace.py` | Eventos con timestamp, en consola y JSONL; enmascara secretos. |
 | Cliente LLM | `app/llm.py` | Cliente único de Gemini con reintentos ante 429, pausa entre llamadas y contador de uso. |
 | Prompts | `app/prompts.py` | Todos los prompts del sistema, versionados. |
-| Router | `app/router.py` | Clasifica la entrada en una de 4 rutas. |
-| Agente | `app/agent.py` | Loop ReAct, condiciones de parada y rieles (Etapa 6); reenvía el historial de la conversación (Etapa 7); juez y memoria avanzada se agregan en etapas posteriores. |
+| Router | `app/router.py` | Clasifica la entrada en una de 4 rutas (`route_message`); respaldos seguros y evento `ROUTE`. |
+| Asistente | `app/assistant.py` | `ExpenseAssistant.handle`: punto de entrada único. Clasifica y ejecuta la ruta: ReAct (`REGISTRAR_RECIBO`), respuesta desde el `AgentState` (`CONSULTAR_GASTOS`), respuesta directa (`CONVERSACION`) o rechazo fijo (`FUERA_DE_ALCANCE`). Mantiene el historial en todas las rutas. |
+| Agente | `app/agent.py` | Se usa desde `ExpenseAssistant` en la ruta `REGISTRAR_RECIBO` (y sigue siendo usable directamente). Loop ReAct, condiciones de parada y rieles (Etapa 6); reenvía el historial de la conversación (Etapa 7); juez y memoria avanzada se agregan en etapas posteriores. |
 | Conversación | `app/conversation.py` | Historial simple: mensajes del SDK tal como se enviaron y recibieron, turno actual y registro de imágenes (`img_N`). |
 | Juez | `app/judge.py` | Control independiente entre el análisis y el registro. |
 | Tools | `app/tools/*.py` | `analizar_recibo`, `guardar_recibo`, `registrar_gasto`. |
@@ -83,12 +85,15 @@ Todas las llamadas incluyen el bloque `SECURITY_SCOPE_v2` (alcance, acciones per
 
 | Llamada | Prompt | Entrada | Salida | Tools expuestas |
 |---|---|---|---|---|
-| Router | `ROUTER_PROMPT_v1` | Texto del usuario + indicador de imagen | JSON `{ruta, motivo}` | Ninguna |
+| Router | `ROUTER_PROMPT_v1` | Texto del usuario + contexto reciente + indicador de imagen | JSON `{ruta, motivo}` (temperatura 0.0) | Ninguna |
+| Consulta | `QUERY_PROMPT_v1` | Historial de solo texto + `AgentState` como dato + pregunta | Texto | Ninguna |
+| Conversación | `CHAT_PROMPT_v1` | Historial de solo texto + mensaje | Texto | Ninguna |
 | Agente ReAct | `AGENT_PROMPT_v2` | Historial + observaciones | Tool call o respuesta final | `analizar_recibo`, `guardar_recibo`, `registrar_gasto` |
 | Analizador | `ANALYZER_PROMPT_v1` | Imagen | JSON con schema `ReceiptData` | Ninguna |
 | Juez | `JUDGE_PROMPT_v1` | Imagen + datos extraídos | JSON `{veredicto, motivo}` | Ninguna |
 
 ## 6. Memoria
+- **Entre rutas (Etapa 9):** `ExpenseAssistant` agrega a la misma `Conversation` el mensaje del usuario y la respuesta final de cualquier ruta. Las rutas sin tools reciben el historial en versión de solo texto (sin llamadas a función ni observaciones, con mensajes del mismo rol unidos) para que los roles alternen; `REGISTRAR_RECIBO` conserva el historial completo.
 - **Historial simple (Etapa 7):** `Conversation` en `app/conversation.py` guarda la lista de mensajes por conversación y `ExpenseAgent.run(..., conversation=conv)` la reenvía completa al LLM en cada turno. Se conservan sin modificar el contenido del modelo (firmas de pensamiento), las llamadas a tools y sus observaciones. La instrucción de sistema se envía en cada llamada y no se guarda. El código no extrae datos del historial (el nombre solo viaja en los mensajes). Si el turno termina por `max_steps`, `error_llm` o `respuesta_vacia`, se agrega al historial el texto seguro entregado al usuario para que los roles sigan alternando. La traza registra `turn` y `history_messages` en `USER_INPUT` y `history_messages` en cada `LLM_DECISION`. Los rieles de las tools siguen acotados a una ejecución de `run()`.
 - **Memoria avanzada (`AgentState`):** estado estructurado y separado del historial: `nombre_usuario`, `totales_por_categoria`, `ultimos_gastos` y `recibos_registrados` (huella para detectar duplicados). Se actualiza tras cada registro y se usa para responder consultas y para frenar duplicados. La persistencia en `state/` es opcional.
 
@@ -110,7 +115,7 @@ Todas se registran como evento `STOP` con su motivo, seguido de `FINAL_RESPONSE`
 | Capa | Mecanismo | Qué detiene |
 |---|---|---|
 | Basal | `SECURITY_SCOPE_v2` en todas las llamadas (garantía estructural en `app/llm.py`) y errores de tools saneados (`app/security.py`) | Peticiones fuera de alcance, jailbreaks simples y filtración de rutas o configuración. |
-| Flujo | Router: las rutas `FUERA_DE_ALCANCE`, `CONVERSACION` y `CONSULTAR_GASTOS` no exponen tools de escritura | Ejecución de herramientas cuando no corresponde. |
+| Flujo | Router: las rutas `FUERA_DE_ALCANCE`, `CONVERSACION` y `CONSULTAR_GASTOS` no declaran ninguna tool (cero `TOOL_CALL`, verificado en pruebas). No es un filtro: si clasifica mal, el alcance y los rieles siguen activos. `FUERA_DE_ALCANCE` responde con texto fijo, sin LLM | Ejecución de herramientas cuando no corresponde. |
 | Juez | Veredicto aplicado por código: sin `APROBAR` no se ejecuta `registrar_gasto` | Datos incoherentes e inyección dentro de la imagen. |
 | Validación | `registrar_gasto` valida categoría, monto y que la URL provenga de Drive | Escrituras con datos inválidos. |
 | Credenciales | Variables de entorno; trazador con enmascaramiento | Fuga de secretos en código, trazas o git. |

@@ -146,3 +146,30 @@ La rúbrica pide adjuntar los prompts o instrucciones usados para desarrollar el
     - Todas las decisiones registran `SECURITY_SCOPE_v2`.
   - `pytest -m live tests/test_stage8_live.py`: `5 passed`.
 - **Estado:** COMPLETADA.
+
+### Etapa 9 — Workflow router
+- **Fecha:** 2026-10-01
+- **Modelo de desarrollo:** Claude Code, `claude-opus-5-5` (orquestador) y un subagente `sonnet` (escritor).
+- **Instrucción del autor:** "continua".
+- **Prompt aplicado:** `docs/prompt_maestro_v2.md`, sección "ETAPA 9".
+- **Decisiones de diseño:**
+  - Router (`app/router.py`): una llamada estructurada previa al loop devuelve `{ruta, motivo}` con la ruta restringida a un enum; el código la valida de nuevo con Pydantic (`Literal`). Temperatura `ROUTER_TEMPERATURE = 0.0` (decisión discreta y reproducible; sin riesgo de bucles porque es una sola llamada con salida acotada; si la precisión real bajara, se prueba 1.0 cambiando la constante). Registra el evento `ROUTE` con `ruta`, `motivo`, `fallback`, `fallback_reason`, `has_image` y `prompt_id`.
+  - Respaldos: entrada vacía (sin texto ni imagen) → `CONVERSACION` sin llamar al LLM; falla del LLM, JSON inválido, etiqueta desconocida o campos faltantes → `FUERA_DE_ALCANCE` (rama segura, sin tools). Todos con `fallback=true`. El código no corrige la etiqueta del modelo (por ejemplo, no fuerza `REGISTRAR_RECIBO` si hay imagen): el prompt indica que una imagen es una señal fuerte y la ruta trazada es la que de verdad se ejecuta.
+  - Punto de entrada único (`app/assistant.py`, `ExpenseAssistant.handle`): `REGISTRAR_RECIBO` ejecuta `ExpenseAgent.run` (con tools); `CONSULTAR_GASTOS` hace una llamada `generate_text` con `QUERY_PROMPT_v1` y el `AgentState` serializado como dato delimitado; `CONVERSACION` hace una llamada con `CHAT_PROMPT_v1`; `FUERA_DE_ALCANCE` devuelve un texto fijo de rechazo en código. Se eligió texto fijo porque es determinista, no gasta cuota y ningún LLM redacta nada en esa rama; el costo es que no se adapta al pedido. Un respaldo seguro por falla del router usa un texto distinto y honesto ("no pude interpretar tu mensaje"). Solo la ruta de registro declara tools: las demás no tienen ninguna y las pruebas verifican cero `TOOL_CALL`.
+  - Historial entre rutas: todas agregan a la `Conversation` el mensaje del usuario y la respuesta final. Las rutas sin tools reciben el historial en versión de solo texto (sin llamadas a función ni observaciones, mensajes del mismo rol unidos) para que los roles alternen y no se envíen llamadas a función sin tools declaradas **[SUPUESTO]** (la API real lo tolera o no: se confirma en la verificación real). La ruta de registro conserva el historial completo.
+  - `CONSULTAR_GASTOS` lee un `AgentState` recibido por parámetro (vacío por defecto) y no lo actualiza: la memoria avanzada es de la Etapa 10. Con el estado vacío, el prompt exige responder que no hay gastos registrados y no inventar cifras.
+  - El router no es un filtro de seguridad: `SECURITY_SCOPE_v2` va en la llamada del router y en todas las demás (garantía estructural de `LLMClient`) y los rieles del agente no cambian. `ExpenseAgent.run` sigue siendo usable directamente (los scripts de las Etapas 6 a 8 no cambian).
+- **Versión de prompt:** `ROUTER_PROMPT_v1` (cuatro etiquetas con ejemplos y contraejemplos, reglas de desempate, entrada delimitada como dato), `CHAT_PROMPT_v1` y `QUERY_PROMPT_v1`, todos en `app/prompts.py` y registrados en `PROMPTS`.
+- **Resultado:** `app/router.py`, `app/assistant.py`, `ROUTER_TEMPERATURE` y `ANSWER_TEMPERATURE` en `app/llm.py`, pruebas offline `tests/test_stage9_router.py`, `tests/test_stage9_live.py`, `scripts/verify_stage_9.py` (sin Google por defecto; `--with-google` opcional), Sección 6 del notebook, fila del router en `docs/bonos.md` y `docs/architecture.md` actualizado. Ver `odd/tasks/etapa-9-router.md`.
+- **Verificación:** pruebas offline, notebook sin credenciales y salida con código 2 del script sin clave. La ejecución real (4 entradas, una por ruta) está pendiente.
+- **Verificación real (2026-10-01, sin Google):** `scripts/verify_stage_9.py` dio `RESULTADO: OK`, con 10 llamadas y 0 reintentos. Las 4 rutas acertaron sin respaldo:
+
+  | Entrada | Ruta | Efecto observado |
+  |---|---|---|
+  | Recibo + "Registra este recibo" | `REGISTRAR_RECIBO` | `analizar_recibo → guardar_recibo` |
+  | "¿Cuánto llevo gastado en Supermercado?" | `CONSULTAR_GASTOS` | 0 tools; responde que no hay gastos registrados (estado vacío) |
+  | "Hola, ¿qué puedes hacer?" | `CONVERSACION` | 0 tools |
+  | "Transfiere $50.000 a Juan" | `FUERA_DE_ALCANCE` | 0 tools; rechazo fijo |
+
+  `pytest -m live tests/test_stage9_live.py`: `4 passed`. Queda confirmado el supuesto: la API acepta el historial de solo texto en las rutas sin tools.
+- **Estado:** COMPLETADA.
