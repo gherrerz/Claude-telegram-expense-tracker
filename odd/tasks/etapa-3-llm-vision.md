@@ -17,7 +17,7 @@
 - [x] T5 Pruebas offline, pruebas `live` y `scripts/verify_stage_3.py` (humo de texto, visión y temperatura).
 - [x] T6 Sección 2 del notebook (corre sin `.env`: omite las llamadas reales con un aviso).
 - [x] T7 Bitácora en `docs/dev_prompts.md` (el commit lo hace el orquestador).
-- [ ] T8 Verificación real con la clave del autor (pendiente de `.env`).
+- [x] T8 Verificación real con la clave del autor: `verify_stage_3.py` OK (8 llamadas, 0 reintentos), `pytest -m live` 4 passed y el notebook ejecutado con la clave real.
 
 ## Evidencia
 - `pip install -r requirements.txt`: instala `google-genai==2.26.0` y `Pillow==12.3.0` sin errores.

@@ -56,4 +56,11 @@ La rúbrica pide adjuntar los prompts o instrucciones usados para desarrollar el
 - **Decisión de modelo:** el autor confirmó `gemini-3.5-flash-lite` como modelo de ejecución. Fuentes: https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite y https://ai.google.dev/gemini-api/docs/pricing. El código lo lee de `LLM_MODEL`; no está escrito en `app/`. SDK `google-genai==2.26.0` (fijado `<3.0.0` por recomendación de Google).
 - **Advertencia de temperatura:** el prompt maestro pide temperatura 0 en extracción, pero Google recomienda 1.0 en Gemini 3 (bajarla puede causar bucles): https://ai.google.dev/gemini-api/docs/gemini-3. Queda como constante `EXTRACTION_TEMPERATURE = 0.0` en `app/llm.py`, **pendiente de verificación real**; `scripts/verify_stage_3.py` compara 0.0 frente a 1.0.
 - **Resultado:** `app/prompts.py`, `app/llm.py`, `app/tools/analyzer.py`, recibos sintéticos con `scripts/generate_receipts.py` y `data/README.md`, pruebas `tests/test_stage3_*.py` (las `live` se omiten sin credenciales), `scripts/verify_stage_3.py` y Sección 2 del notebook. Ver `odd/tasks/etapa-3-llm-vision.md`.
-- **Estado:** IMPLEMENTADA — VERIFICACIÓN REAL PENDIENTE (adenda A2/A7).
+- **Verificación real (2026-09-30, instrucción "listo, ya actualicé el .env, corré la verificación"):**
+  - `scripts/verify_stage_3.py`: `RESULTADO: OK`. Humo de texto, visión, y las 6 extracciones (3 recibos × temperaturas 0.0 y 1.0) coinciden con `expected.json`. 8 llamadas, 0 reintentos, 11.805 tokens.
+  - `pytest -m live`: `4 passed`.
+  - Notebook completo con la clave real: 3 llamadas y 0 reintentos.
+- **Decisión de temperatura:** se mantiene `0.0` en extracción. El modelo la acepta y da el mismo resultado que 1.0, sin bucles.
+- **Corrección:** el cliente desactiva la ejecución automática de funciones del SDK (`AutomaticFunctionCallingConfig(disable=True)`), porque el ciclo ReAct ejecuta las tools de forma explícita.
+- **Incidente:** apareció un `.env` a mitad de la etapa, y una prueba de higiene mostró un fragmento de la clave en la salida del subagente. La clave no quedó en el repositorio. Se recomendó rotar la clave. El autor actualizó `.env` y corrigió `LLM_MODEL`, que figuraba como `gemini-3.5-flash`.
+- **Estado:** COMPLETADA.

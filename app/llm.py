@@ -22,9 +22,10 @@ from app.models import EventType
 from app.prompts import SECURITY_SCOPE_ID, compose_system_instruction
 from app.trace import Tracer
 
-# Temperatura para extracción: 0.0 según el prompt maestro. Pendiente de
-# verificación real: Google recomienda 1.0 en Gemini 3 (bajarla puede causar
-# bucles) y no está comprobado que gemini-3.5-flash-lite acepte 0.0.
+# Temperatura para extracción: 0.0 según el prompt maestro. Google recomienda
+# 1.0 en Gemini 3 (bajarla puede causar bucles), pero la verificación real del
+# 2026-09-30 (scripts/verify_stage_3.py) mostró que gemini-3.5-flash-lite acepta
+# 0.0 y extrae igual que con 1.0 en los 3 recibos, sin bucles ni reintentos.
 EXTRACTION_TEMPERATURE = 0.0
 
 RETRYABLE_CODES = frozenset({429, 503})
@@ -194,6 +195,9 @@ class LLMClient:
         config_kwargs: dict[str, Any] = {
             "system_instruction": compose_system_instruction(system_prompt_id),
             "temperature": temperature,
+            # El ciclo ReAct ejecuta las tools de forma explícita; el SDK nunca
+            # debe llamarlas por su cuenta.
+            "automatic_function_calling": types.AutomaticFunctionCallingConfig(disable=True),
         }
         if thinking_level is not None:
             config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level=thinking_level)
