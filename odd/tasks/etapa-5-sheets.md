@@ -16,7 +16,7 @@
 - [x] T3 Pruebas offline, prueba `live` y `scripts/verify_stage_5.py` (antes, append, después y repetición sin cambio).
 - [x] T4 Sección 8 del notebook: evidencia antes y después.
 - [x] T5 Bitácora y `docs/bonos.md` (mecanismo de repetibilidad).
-- [ ] T6 Verificación real.
+- [x] T6 Verificación real (2026-10-01): `verify_stage_5.py` OK (0 → 1 fila; la repetición se marca duplicada y el conteo no cambia); `pytest -m live` 1 passed. `drive.file` alcanza para Sheets.
 
 ## Evidencia
 - T1 `app/tools/sheets.py` creado: `registrar_gasto` valida (categoría, monto > 0, fecha ISO, comercio, URL https `drive.google.com`) antes de cualquier llamada; deduplica leyendo `A:E`; agrega con `values.append(RAW, INSERT_ROWS)`; `row_number` sale de `updates.updatedRange`. `SheetResult` ganó `duplicate` y `error`.
