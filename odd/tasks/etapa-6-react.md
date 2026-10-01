@@ -12,7 +12,7 @@
 - [x] T3 `app/agent.py`: loop, despacho de tools, `MAX_STEPS=6`, eventos `STOP` con motivo y rieles de código (la URL de `registrar_gasto` tiene que venir de `guardar_recibo` en la misma ejecución).
 - [x] T4 Pruebas offline: flujo normal, parada por respuesta, parada por `MAX_STEPS`, confianza baja, degradación sin Google y orden decidido por el LLM.
 - [x] T5 `scripts/verify_stage_6.py`, prueba `live` y Sección 3 del notebook.
-- [ ] T6 Bitácora (decisión A12) y verificación real.
+- [x] T6 Bitácora (decisión A12) y verificación real. Con Google: OK (fila 4, 5 llamadas). Sin Google: degradación honesta OK. `pytest -m live` 1 passed.
 
 ## Evidencia
 - Ruta: delegated direct (un escritor `sonnet`). Disparador: 2+ archivos no triviales.

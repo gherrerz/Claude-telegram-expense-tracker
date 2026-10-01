@@ -103,4 +103,9 @@ La rúbrica pide adjuntar los prompts o instrucciones usados para desarrollar el
 - **Decisión de temperatura:** `AGENT_TEMPERATURE = 0.0` por determinismo, con la evidencia de la Etapa 3. Google recomienda 1.0 en Gemini 3 (https://ai.google.dev/gemini-api/docs/gemini-3). **Pendiente de verificación real**: si el loop mostrara bucles, se vuelve a 1.0 cambiando la constante.
 - **Resultado:** `AGENT_PROMPT_v1` en `app/prompts.py`, `generate_with_tools` en `app/llm.py`, `app/agent.py`, `CONFIDENCE_THRESHOLD` en `app/models.py`, pruebas offline `tests/test_stage6_agent.py` (LLM guionado en `tests/fakes.py`), `tests/test_stage6_live.py`, `scripts/verify_stage_6.py` y Sección 3 del notebook. Ver `odd/tasks/etapa-6-react.md`.
 - **Verificación:** pruebas offline y notebook ejecutados sin credenciales. La ejecución real del loop está pendiente.
-- **Estado:** IMPLEMENTADA — VERIFICACIÓN REAL PENDIENTE.
+- **Verificación real (2026-10-01):**
+  - **Con Google:** `scripts/verify_stage_6.py` dio `RESULTADO: OK`. El LLM decidió la secuencia `analizar_recibo → guardar_recibo → registrar_gasto`, con las observaciones devueltas al LLM. Paró por `respuesta_final` en 4 de 6 decisiones y confirmó la fila 4. Consumió 5 llamadas y 0 reintentos.
+  - **Sin Google (degradación A12):** `RESULTADO: OK`. La secuencia fue `analizar_recibo → guardar_recibo`, la parada fue por `respuesta_final` y el agente informó con honestidad que no pudo registrar, sin afirmar ninguna fila. Consumió 4 llamadas.
+  - `pytest -m live tests/test_stage6_live.py`: `1 passed`.
+  - Con `AGENT_TEMPERATURE = 0.0` no hubo bucles ni reintentos.
+- **Estado:** COMPLETADA.
