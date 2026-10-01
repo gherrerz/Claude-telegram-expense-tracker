@@ -36,6 +36,7 @@ ALL_VARIABLES: tuple[str, ...] = (
     "DRIVE_FOLDER_ID",
     "SHEET_ID",
     "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_ALLOWED_CHAT_IDS",
 )
 
 # Variables cuyo valor es secreto (las usa el trazador para enmascarar).
@@ -71,6 +72,8 @@ class Settings:
     drive_folder_id: Optional[str] = None
     sheet_id: Optional[str] = None
     telegram_bot_token: Optional[str] = None
+    # Chats autorizados (Etapa 13). Vacío = sin restricción (el bot lo avisa al iniciar).
+    telegram_allowed_chat_ids: tuple[int, ...] = ()
 
     def __repr__(self) -> str:  # evita filtrar secretos por accidente
         return "Settings(<oculto>)"
@@ -160,6 +163,17 @@ def load_settings(
             "Valores inválidos (se espera la ruta a un archivo .json, no el secreto)",
         )
 
+    allowed_chat_ids: list[int] = []
+    raw = _clean(source, "TELEGRAM_ALLOWED_CHAT_IDS")
+    if raw is not None:
+        try:
+            allowed_chat_ids = [int(item) for item in raw.split(",") if item.strip()]
+        except ValueError:
+            raise ConfigError(
+                ["TELEGRAM_ALLOWED_CHAT_IDS"],
+                "Valores inválidos (se espera una lista de enteros separados por comas)",
+            ) from None
+
     return Settings(
         gemini_api_key=_clean(source, "GEMINI_API_KEY"),
         llm_model=_clean(source, "LLM_MODEL"),
@@ -170,6 +184,7 @@ def load_settings(
         drive_folder_id=_clean(source, "DRIVE_FOLDER_ID"),
         sheet_id=_clean(source, "SHEET_ID"),
         telegram_bot_token=_clean(source, "TELEGRAM_BOT_TOKEN"),
+        telegram_allowed_chat_ids=tuple(allowed_chat_ids),
     )
 
 

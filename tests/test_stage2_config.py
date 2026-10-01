@@ -130,3 +130,15 @@ def test_oauth_variables_must_be_json_paths():
     assert "GOOGLE_OAUTH_TOKEN" in message
     assert "GOOGLE_OAUTH_CLIENT_SECRETS" not in message
     assert secret_like not in message
+
+
+def test_allowed_chat_ids_parsing_default_and_error():
+    assert load_settings(env=EXAMPLE_ENV).telegram_allowed_chat_ids == ()
+    env = {**EXAMPLE_ENV, "TELEGRAM_ALLOWED_CHAT_IDS": "123, -456 ,"}
+    assert load_settings(env=env).telegram_allowed_chat_ids == (123, -456)
+    bad = {**EXAMPLE_ENV, "TELEGRAM_ALLOWED_CHAT_IDS": "12,abc-secreto"}
+    with pytest.raises(ConfigError) as exc:
+        load_settings(env=bad)
+    assert "TELEGRAM_ALLOWED_CHAT_IDS" in str(exc.value)
+    assert "abc-secreto" not in str(exc.value)
+    assert config_status(bad)["TELEGRAM_ALLOWED_CHAT_IDS"] == "definida"

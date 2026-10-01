@@ -17,6 +17,7 @@ Proyecto académico: tarea final del curso de agentes de IA. La entrega evaluada
 - [Arquitectura](docs/architecture.md)
 - [Ampliaciones declaradas (bonos)](docs/bonos.md)
 - [Mapa frente a la materia del curso](docs/mapa_curso.md)
+- [Demo de Telegram (BotFather, ejecución y prueba manual)](docs/setup_telegram.md)
 - [Prompts de desarrollo y bitácora por etapa](docs/dev_prompts.md)
 - [Prompt maestro de desarrollo](docs/prompt_maestro_v2.md)
 - [Reglas para agentes de código](AGENTS.md)
@@ -37,7 +38,7 @@ Proyecto académico: tarea final del curso de agentes de IA. La entrega evaluada
 | 10 | Memoria avanzada | Completada |
 | 11 | Juez LLM | Completada |
 | 12 | Golden set | Completada (v1: 13/13) |
-| 13 | Demo Telegram | Pendiente |
+| 13 | Demo Telegram | Implementada — prueba manual pendiente |
 | 14 | Notebook final y entrega | Pendiente |
 
 ## Instalación
@@ -78,6 +79,13 @@ Con `.env` completo, `pytest -q` también ejecuta las pruebas `live`; para evita
 
 # Verificación real: sube un recibo y confirma el file_id con files.get
 .venv\Scripts\python scripts\verify_stage_4.py
+```
+
+### Cómo ejecutar la demo de Telegram (Etapa 13)
+
+```powershell
+# Con TELEGRAM_BOT_TOKEN (y opcionalmente TELEGRAM_ALLOWED_CHAT_IDS) en .env; ver docs/setup_telegram.md
+.venv\Scripts\python -m app.telegram_bot
 ```
 
 ## Requisitos (previstos)

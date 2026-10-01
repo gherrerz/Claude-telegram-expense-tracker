@@ -247,3 +247,19 @@ La rúbrica pide adjuntar los prompts o instrucciones usados para desarrollar el
 - **Corrección del orquestador:** la primera versión del arnés simulaba con éxito `guardar_recibo` y `registrar_gasto` en los casos sin Google, lo que contradice A12. Se reemplazó por las tools reales en modo degradado (`reales_sin_google`), sin cambiar ningún criterio.
 - **Corrida real v1 (2026-10-01):** `eval/run_eval.py --system-version v1` dio `RESULTADO: APROBADA`. Pasaron 13/13 casos (100%), con 65 llamadas LLM, 119.912 tokens y sin interrupciones. Archivo: `eval/results_v1.json`; historial en `docs/evaluation.md`. Queda resuelto el supuesto de GS09: el recibo generado se categorizó como Supermercado.
 - **Estado:** COMPLETADA.
+
+### Etapa 13 — Demo Telegram
+- **Fecha:** 2026-10-01
+- **Modelo de desarrollo:** Claude Code, `claude-opus-5-5` (orquestador) y un subagente `sonnet` (escritor).
+- **Instrucción del autor:** "continuar".
+- **Prompt aplicado:** `docs/prompt_maestro_v2.md`, sección "ETAPA 13".
+- **Decisiones de diseño:**
+  - Sin lógica nueva: `app/telegram_bot.py` solo adapta E/S hacia `ExpenseAssistant.handle` (importa únicamente `assistant`, `config`, `trace`, `conversation` y `models`; una prueba lo comprueba).
+  - Una sesión por chat (`Conversation`, `AgentState` y `Tracer` `telegram_<chat_id>`), creada de forma perezosa. `handle` corre en un hilo (`asyncio.to_thread`) y los turnos de un chat se serializan con un `asyncio.Lock`.
+  - Las fotos se descargan (tamaño mayor) a un directorio temporal por chat que dura toda la sesión, porque la confirmación pendiente de la Etapa 10 puede requerir una imagen de un turno anterior; se elimina al detener el bot.
+  - El token no se filtra: `httpx`/`telegram` en WARNING (a INFO registran la URL con el token), enmascarado del token en toda línea de log (fábrica de registros) y en la traza (`extra_secrets`); los errores se registran sin traza, solo tipo y mensaje enmascarado.
+  - Acceso: `TELEGRAM_ALLOWED_CHAT_IDS` (opcional, enteros separados por comas; inválido -> `ConfigError` con solo el nombre). Vacía = bot abierto, con un WARNING al iniciar. `/start` muestra el chat id para configurarla.
+  - Librería: `python-telegram-bot==22.8` (símbolos verificados en el código instalado; el sitio de documentación no se consultó).
+- **Resultado:** `app/telegram_bot.py`, `TELEGRAM_ALLOWED_CHAT_IDS` en `app/config.py`, `tests/test_stage13_telegram.py`, `docs/setup_telegram.md` y fila 13 del README. Ver `odd/tasks/etapa-13-telegram.md`.
+- **Verificación:** pruebas offline sin red. La prueba manual con el token real y la transcripción de la traza están pendientes.
+- **Estado:** IMPLEMENTADA — PRUEBA MANUAL PENDIENTE.
