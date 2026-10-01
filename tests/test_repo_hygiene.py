@@ -4,6 +4,7 @@ Verifican que la documentación obligatoria existe y cubre la rúbrica,
 y que no hay secretos versionados.
 """
 import re
+import subprocess
 from pathlib import Path
 
 import nbformat
@@ -106,8 +107,31 @@ def test_gitignore_excludes_secrets():
     assert "secrets/" in text
 
 
+def _candidate_files():
+    """Archivos que git versionaría: rastreados y no ignorados.
+
+    Si git no está disponible, se recorre el árbol completo.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "ls-files", "-co", "--exclude-standard"],
+            cwd=ROOT, capture_output=True, text=True, check=True,
+        ).stdout
+        return [ROOT / line for line in out.splitlines() if line]
+    except (OSError, subprocess.CalledProcessError):
+        return list(ROOT.rglob("*"))
+
+
+def _safe_name(path: Path) -> str:
+    """Ruta relativa con los secretos enmascarados (el nombre podría contenerlos)."""
+    rel = str(path.relative_to(ROOT))
+    for pattern in SECRET_PATTERNS:
+        rel = pattern.sub("***", rel)
+    return rel
+
+
 def test_no_secrets_committed():
-    for path in ROOT.rglob("*"):
+    for path in _candidate_files():
         # Se omiten el entorno virtual y cachés: no son código del proyecto.
         if not path.is_file() or {".git", ".venv", "__pycache__", ".pytest_cache"} & set(path.parts):
             continue
@@ -127,7 +151,7 @@ def test_no_secrets_committed():
         for pattern in SECRET_PATTERNS:
             # El mensaje no incluye el contenido, solo la ruta.
             if pattern.search(content):
-                pytest.fail(f"Posible secreto en {path.relative_to(ROOT)}", pytrace=False)
+                pytest.fail(f"Posible secreto en {_safe_name(path)}", pytrace=False)
 
 
 def test_notebook_is_valid():

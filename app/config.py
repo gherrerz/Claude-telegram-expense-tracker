@@ -145,6 +145,21 @@ def load_settings(
     if invalid:
         raise ConfigError(invalid, "Valores inválidos (se espera un número no negativo)")
 
+    # Las variables OAuth son RUTAS a archivos JSON. Si contienen el client
+    # secret (prefijo GOCSPX-), el token terminaría guardado en un archivo con
+    # el secreto como nombre.
+    bad_paths = [
+        name
+        for name in ("GOOGLE_OAUTH_CLIENT_SECRETS", "GOOGLE_OAUTH_TOKEN")
+        if (value := _clean(source, name)) is not None
+        and (value.startswith("GOCSPX-") or not value.lower().endswith(".json"))
+    ]
+    if bad_paths:
+        raise ConfigError(
+            bad_paths,
+            "Valores inválidos (se espera la ruta a un archivo .json, no el secreto)",
+        )
+
     return Settings(
         gemini_api_key=_clean(source, "GEMINI_API_KEY"),
         llm_model=_clean(source, "LLM_MODEL"),

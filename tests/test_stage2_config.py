@@ -119,3 +119,14 @@ def test_every_settings_variable_is_declared_in_env_example():
             declared.add(line.partition("=")[0].strip())
     missing = [name for name in ALL_VARIABLES if name not in declared]
     assert not missing, f".env.example no declara: {missing}"
+
+
+def test_oauth_variables_must_be_json_paths():
+    secret_like = "GOCSPX-" + "x" * 28
+    env = {"GOOGLE_OAUTH_TOKEN": secret_like, "GOOGLE_OAUTH_CLIENT_SECRETS": "secrets/c.json"}
+    with pytest.raises(ConfigError) as exc:
+        load_settings(env=env)
+    message = str(exc.value)
+    assert "GOOGLE_OAUTH_TOKEN" in message
+    assert "GOOGLE_OAUTH_CLIENT_SECRETS" not in message
+    assert secret_like not in message
