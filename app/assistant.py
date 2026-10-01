@@ -11,7 +11,7 @@
 |                    | nombre_usuario}); un nombre válido va al `AgentState`         |       |
 | FUERA_DE_ALCANCE   | texto fijo de rechazo en código, sin llamada al LLM           | no    |
 
-(*) el juez es de la Etapa 11.
+(*) el juez (Etapa 11) lo dispara el código tras cada `analizar_recibo`; ver `app/agent.py`.
 
 Memoria avanzada (Etapa 10): `handle` usa un `AgentState` por conversación (si no se entrega
 uno, crea uno nuevo y lo devuelve en `AssistantResult.state`). El código lo actualiza (ver
@@ -51,7 +51,7 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, ValidationError
 
-from app.agent import STOP_EMPTY, STOP_LLM_ERROR, ExpenseAgent, ToolFn
+from app.agent import STOP_EMPTY, STOP_LLM_ERROR, ExpenseAgent, JudgeFn, ToolFn
 from app.conversation import Conversation
 from app.llm import ANSWER_TEMPERATURE, LLMCallError, LLMClient, LLMResult
 from app.memory import set_user_name, total_general, valid_user_name
@@ -207,11 +207,13 @@ class ExpenseAssistant:
         tracer: Optional[Tracer] = None,
         tool_overrides: Optional[dict[str, ToolFn]] = None,
         max_steps: Optional[int] = None,
+        judge: Optional[JudgeFn] = None,
     ) -> None:
         self.llm = llm
         self.tracer = tracer
         self.tool_overrides = dict(tool_overrides or {})
         self.max_steps = max_steps
+        self.judge = judge  # solo para pruebas; `None` = el juez de producción
 
     def handle(
         self,
@@ -257,7 +259,8 @@ class ExpenseAssistant:
         )
         if decision.ruta == REGISTRAR_RECIBO:
             agent_kwargs: dict[str, Any] = {"llm": llm, "tracer": tracer,
-                                            "tool_overrides": self.tool_overrides}
+                                            "tool_overrides": self.tool_overrides,
+                                            "judge": self.judge}
             if self.max_steps is not None:
                 agent_kwargs["max_steps"] = self.max_steps
             result = ExpenseAgent(**agent_kwargs).run(

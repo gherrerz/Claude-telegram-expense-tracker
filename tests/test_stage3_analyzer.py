@@ -65,7 +65,7 @@ def test_expected_json_matches_files():
     expected = json.loads((RECEIPTS / "expected.json").read_text(encoding="utf-8"))
     files = sorted(p.name for p in RECEIPTS.glob("*.jpg"))
     assert sorted(expected) == files == [
-        "receipt_hard.jpg", "receipt_illegible.jpg", "receipt_normal.jpg"
+        "receipt_hard.jpg", "receipt_illegible.jpg", "receipt_injection.jpg", "receipt_normal.jpg"
     ]
     for name, exp in expected.items():
         assert detect_mime_type((RECEIPTS / name).read_bytes()) == "image/jpeg"
@@ -74,6 +74,8 @@ def test_expected_json_matches_files():
     assert expected["receipt_hard.jpg"]["monto"] == 12990
     assert expected["receipt_illegible.jpg"]["monto"] == UNKNOWN
     assert expected["receipt_illegible.jpg"]["fecha"] == UNKNOWN
+    assert expected["receipt_injection.jpg"]["monto"] == 4590
+    assert expected["receipt_injection.jpg"]["inyeccion"] is True
 
 
 def test_generator_is_deterministic(tmp_path):
@@ -85,7 +87,8 @@ def test_generator_is_deterministic(tmp_path):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     module.generate(tmp_path)
-    for name in ("receipt_normal.jpg", "receipt_hard.jpg", "receipt_illegible.jpg"):
+    for name in ("receipt_normal.jpg", "receipt_hard.jpg", "receipt_illegible.jpg",
+                 "receipt_injection.jpg"):
         assert (tmp_path / name).read_bytes() == (RECEIPTS / name).read_bytes()
     assert (tmp_path / "expected.json").read_text(encoding="utf-8") == (
         RECEIPTS / "expected.json"

@@ -44,7 +44,7 @@ from app.trace import Tracer
 NO_IMAGE_HASH = "sin-imagen"
 MAX_NAME_CHARS = 40
 
-ConfirmationKind = Literal["duplicado", "baja_confianza"]
+ConfirmationKind = Literal["duplicado", "baja_confianza", "juez"]
 
 
 # -- Huellas ---------------------------------------------------------------------------
@@ -103,6 +103,25 @@ def existing_row(state: AgentState, key: str) -> Optional[int]:
     """Fila de la planilla del primer registro de este recibo, si se conoce."""
     match = existing_row_key(state, key)
     return state.filas_por_recibo.get(match) if match is not None else None
+
+
+def rejected_key(state: AgentState, key: str) -> Optional[str]:
+    """Huella rechazada por el juez que coincide con `key` (idéntica o de la misma imagen), o `None`."""
+    return next((k for k in state.recibos_rechazados if same_receipt(k, key)), None)
+
+
+def reject_receipt(
+    state: AgentState, key: str, tracer: Optional[Tracer] = None,
+    motivo: str = "el juez rechazó el recibo",
+) -> bool:
+    """Marca el recibo como rechazado por el juez (definitivo). Devuelve `False` si ya lo estaba."""
+    if rejected_key(state, key) is not None:
+        return False
+    antes = {"n_recibos_rechazados": len(state.recibos_rechazados)}
+    state.recibos_rechazados.append(key)
+    _emit(tracer, "reject_receipt", antes,
+          {"n_recibos_rechazados": len(state.recibos_rechazados)}, motivo)
+    return True
 
 
 # -- Vistas del estado -----------------------------------------------------------------
@@ -257,16 +276,20 @@ def set_pending_confirmation(
     imagen_id: Optional[str] = None,
     imagen_hash: Optional[str] = None,
     fila_existente: Optional[int] = None,
+    juicio: Optional[dict[str, Any]] = None,
     tracer: Optional[Tracer] = None,
     motivo: Optional[str] = None,
 ) -> PendingConfirmation:
     """Deja una confirmación pendiente para el recibo `key`, creada en el turno `turn`.
 
     Si ya hay una pendiente del mismo tipo y la misma huella, se conserva tal cual (con su
-    turno original): reanalizar el recibo en el turno de confirmación no la rejuvenece.
+    turno original): reanalizar el recibo en el turno de confirmación no la rejuvenece. Solo se
+    actualiza el veredicto del juez (`juicio`) si se entrega.
     """
     current = state.confirmacion_pendiente
     if current is not None and current.tipo == kind and same_receipt(current.clave, key):
+        if juicio:
+            current.juicio = dict(juicio)
         return current
     pending = PendingConfirmation(
         tipo=kind,
@@ -277,6 +300,7 @@ def set_pending_confirmation(
         fila_existente=fila_existente,
         imagen_id=imagen_id,
         imagen=imagen,
+        juicio=dict(juicio or {}),
     )
     antes = {"confirmacion_pendiente": _pending_view(current)}
     state.confirmacion_pendiente = pending

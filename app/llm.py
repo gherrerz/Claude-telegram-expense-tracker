@@ -47,6 +47,10 @@ ROUTER_TEMPERATURE = 0.0
 # 0.0 prioriza fidelidad al estado entregado (no inventar cifras) sobre variedad de redacción.
 ANSWER_TEMPERATURE = 0.0
 
+# Temperatura del juez (Etapa 11): un veredicto de verificación debe ser reproducible. Es una sola
+# llamada con salida JSON acotada, así que el riesgo de bucles de Gemini 3 con 0.0 no aplica.
+JUDGE_TEMPERATURE = 0.0
+
 RETRYABLE_CODES = frozenset({429, 503})
 RETRYABLE_STATUSES = frozenset({"RESOURCE_EXHAUSTED", "UNAVAILABLE"})
 BACKOFF_BASE_SECONDS = 2.0
