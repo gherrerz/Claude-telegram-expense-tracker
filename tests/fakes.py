@@ -145,3 +145,53 @@ class FakeSheetsService:
 
     def values(self):
         return self._values
+
+
+# -- Etapa 6: LLM falso con function calling ---------------------------------------
+def fc_response(*calls, text=None, signature=b"firma-de-prueba", prompt=10, out=5):
+    """Respuesta real del SDK (`GenerateContentResponse`) con llamadas a función.
+
+    `calls` son tuplas `(nombre, args)`. Con `text` y sin `calls` es una respuesta final.
+    La primera llamada lleva una `thought_signature` para comprobar que se conserva.
+    """
+    from google.genai import types
+
+    parts = []
+    for index, (name, args) in enumerate(calls):
+        parts.append(
+            types.Part(
+                function_call=types.FunctionCall(id=f"call-{name}-{index}", name=name, args=args),
+                thought_signature=signature if index == 0 else None,
+            )
+        )
+    if text is not None:
+        parts.append(types.Part(text=text))
+    return types.GenerateContentResponse(
+        candidates=[types.Candidate(content=types.Content(role="model", parts=parts))],
+        usage_metadata=types.GenerateContentResponseUsageMetadata(
+            prompt_token_count=prompt, candidates_token_count=out, total_token_count=prompt + out
+        ),
+    )
+
+
+class ScriptedModels:
+    """`models.generate_content` guionado; guarda una COPIA de `contents` en cada llamada."""
+
+    def __init__(self, script):
+        self.script = list(script)
+        self.calls = []
+
+    def generate_content(self, *, model, contents, config):
+        self.calls.append({"model": model, "contents": list(contents), "config": config})
+        item = self.script.pop(0) if self.script else self.repeat
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    repeat = None  # respuesta que se repite al agotarse el guion (opcional)
+
+
+class ScriptedClient:
+    def __init__(self, script, repeat=None):
+        self.models = ScriptedModels(script)
+        self.models.repeat = repeat

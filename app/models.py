@@ -9,6 +9,9 @@ from pydantic import BaseModel, Field, field_validator
 
 UNKNOWN = "desconocido"
 
+# Confianza mínima de una extracción para registrarla sin pedir confirmación.
+CONFIDENCE_THRESHOLD = 0.7
+
 ALLOWED_CATEGORIES: tuple[str, ...] = (
     "Alimentación",
     "Supermercado",
