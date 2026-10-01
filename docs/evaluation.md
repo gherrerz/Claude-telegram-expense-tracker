@@ -125,3 +125,12 @@ Se completa con corridas reales (`eval/results_vN.json`); no se inventan resulta
 
 | Versión del sistema | Fecha | Golden set | Aprobados / casos | Fallidos | Pendientes | Llamadas LLM | Interrumpida | Cambio que motivó la versión | Archivo |
 |---|---|---|---|---|---|---|---|---|---|
+| v1 | 2026-10-01 (12:53–13:08, -03:00) | v1 (sha256 `798987dc…`) | 13 / 13 | 0 | 0 | 65 (119.912 tokens) | no | Primera corrida del sistema completo (Etapas 3–11) | `eval/results_v1.json` |
+
+**Nota sobre la corrida v1.** Pasó el 100% en la primera ejecución, así que no hubo fallos que corregir ni versiones siguientes. Los resultados se revisaron caso por caso y vienen de ejecuciones reales:
+- GS01 registró la fila 11 con veredicto del juez `APROBAR`.
+- GS06 terminó en `RECHAZAR` con 0 ejecuciones de guardar y registrar.
+- GS04 terminó en `PEDIR_CONFIRMACION` sin registrar nada.
+- GS10 detectó el duplicado de la fila 13 y pidió confirmación.
+
+Los casos sin Google usaron las tools reales en modo degradado (`reales_sin_google`), nunca simuladas.

@@ -244,4 +244,6 @@ La rúbrica pide adjuntar los prompts o instrucciones usados para desarrollar el
   - **[SUPUESTO]** El recibo generado se categoriza como Supermercado (como en las verificaciones de las Etapas 10 y 11); si el modelo eligiera otra categoría, GS09 fallaría y se corregiría el sistema, no el caso.
 - **Resultado:** `eval/golden_set_v1.json`, `eval/run_eval.py`, `eval/criteria.py`, `tests/test_stage12_eval.py`, Sección 10 del notebook (con `RUN_EVAL = False` por defecto), `docs/evaluation.md`, fila del golden set en `docs/bonos.md` y fila 12 del README. Ver `odd/tasks/etapa-12-eval.md`.
 - **Verificación:** pruebas offline (`448 passed, 20 deselected`; 90 son del arnés), notebook sin credenciales ejecutado con `nbconvert` y salida con código 2 del script sin configuración. La corrida real del golden set (T5) está pendiente: sin ella no hay evidencia del bono.
-- **Estado:** IMPLEMENTADA — CORRIDA REAL PENDIENTE.
+- **Corrección del orquestador:** la primera versión del arnés simulaba con éxito `guardar_recibo` y `registrar_gasto` en los casos sin Google, lo que contradice A12. Se reemplazó por las tools reales en modo degradado (`reales_sin_google`), sin cambiar ningún criterio.
+- **Corrida real v1 (2026-10-01):** `eval/run_eval.py --system-version v1` dio `RESULTADO: APROBADA`. Pasaron 13/13 casos (100%), con 65 llamadas LLM, 119.912 tokens y sin interrupciones. Archivo: `eval/results_v1.json`; historial en `docs/evaluation.md`. Queda resuelto el supuesto de GS09: el recibo generado se categorizó como Supermercado.
+- **Estado:** COMPLETADA.
