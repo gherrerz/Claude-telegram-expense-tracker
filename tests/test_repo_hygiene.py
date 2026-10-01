@@ -39,6 +39,8 @@ SECRET_PATTERNS = [
     re.compile(r"sk-(or-)?[0-9A-Za-z]{20,}"),
     re.compile(r"\b\d{8,10}:[0-9A-Za-z_\-]{35}\b"),
     re.compile(r"-----BEGIN (RSA )?PRIVATE KEY-----"),
+    # Client secret de OAuth de Google.
+    re.compile(r"GOCSPX-[0-9A-Za-z_\-]{20,}"),
 ]
 
 

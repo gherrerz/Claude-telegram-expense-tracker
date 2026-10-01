@@ -31,3 +31,6 @@ Thumbs.db
 
 # Herramientas locales del agente de desarrollo
 .atl/
+
+# Valores de secretos OAuth usados por error como nombre de archivo
+GOCSPX-*
