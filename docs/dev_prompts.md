@@ -280,4 +280,9 @@ La rúbrica pide adjuntar los prompts o instrucciones usados para desarrollar el
 - **Resultado:** `notebooks/demo.ipynb` (53 celdas, sin salidas), `app/llm.py` (acumulador), `tests/test_stage14_session.py`, `docs/setup_llm.md`, `docs/trace_examples.md`, `docs/checklist_rubrica.md`, README con la ficha, el consumo y los entregables, y ajustes en `docs/bonos.md`. Ver `odd/tasks/etapa-14-final.md`.
 - **Verificación (escritor):** `pytest -q -m "not live"` con las variables en blanco: 468 passed y 1 failed. La falla conocida es `.env.example` sin `TELEGRAM_ALLOWED_CHAT_IDS` (`test_stage2_config.py`), que el autor corrige (el agente de desarrollo no puede leer ni editar `.env*`). `nbconvert --execute` del notebook reordenado con las variables en blanco: sin errores, 53 celdas, las celdas con LLM omitidas con aviso. Sin llamadas reales.
 - **Verificación real:** pendiente. El orquestador ejecuta el notebook completo con credenciales reales, mide las llamadas y completa «Consumo medido» en el README y el checklist.
-- **Estado:** EN CURSO — EJECUCIÓN REAL PENDIENTE.
+- **Ejecución real (2026-10-01):** `nbconvert --execute` de `notebooks/demo.ipynb` con Gemini, Drive y Sheets, en un kernel limpio, terminó con código de salida 0. Las 53 celdas corrieron sin errores y ninguna sección quedó «omitido»; el resultado es `notebooks/demo_executed.ipynb`, y se revisó que no contenga secretos.
+  - Consumo: 73 llamadas LLM, 137.042 tokens y unos 24 min.
+  - Hubo 42 reintentos, todos 503 `UNAVAILABLE`, y 2 llamadas fallaron tras agotarlos. El notebook las informó con honestidad y todas las comprobaciones de la rúbrica se cumplieron (por ejemplo, la Sección 4 confirma "Diego" con historial y su ausencia sin historial).
+  - Ningún 429 por cuota. Las cifras se registraron en el README («Consumo medido») y en `docs/checklist_rubrica.md`.
+- **Pendientes del autor:** los límites que muestra AI Studio para su cuenta, la línea `TELEGRAM_ALLOWED_CHAT_IDS=` en `.env.example` y la prueba manual de Telegram.
+- **Estado:** COMPLETADA (con los pendientes del autor indicados).

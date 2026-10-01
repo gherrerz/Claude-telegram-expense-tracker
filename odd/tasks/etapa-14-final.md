@@ -15,8 +15,8 @@
 - [x] T1 Reordenar el notebook (secciones 0–10), ficha de reproducción en la Sección 0 y contador de llamadas al final.
 - [x] T2 `docs/setup_llm.md`, la ficha en el README y `docs/trace_examples.md`, con trazas reales ya generadas.
 - [x] T3 `docs/checklist_rubrica.md`: cada criterio y bono con estado, celda y prueba.
-- [ ] T4 Ejecución real completa del notebook (`nbconvert --execute`), medición de llamadas y copia ejecutada.
-- [ ] T5 Suite completa en verde y revisión final.
+- [x] T4 Ejecución real completa del notebook: código de salida 0, 53 celdas sin errores, 73 llamadas, 137.042 tokens, unos 24 min y 42 reintentos 503; `notebooks/demo_executed.ipynb` sin secretos.
+- [ ] T5 Suite completa en verde: 468 de 469 pasan. Falta la línea `TELEGRAM_ALLOWED_CHAT_IDS=` en `.env.example`, que agrega el autor.
 
 ## Evidencia
 - **T1 (2026-10-01):** `notebooks/demo.ipynb` con 53 celdas y sin salidas. El orden ya era 0 a 10; se agregó la ficha de reproducción y la celda de parámetros (Sección 0, celdas #6 a #8), se corrigió texto desactualizado y se agregó el cierre «Resumen de consumo» (celdas #51 y #52). Acumulador de consumo: `session_stats()` en `app/llm.py` (prueba: `tests/test_stage14_session.py`, 4 pruebas). `nbconvert --execute` con las variables en blanco: sin errores. Sección 0 más cada sección por separado: corren sin errores.

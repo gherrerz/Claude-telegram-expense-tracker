@@ -176,11 +176,13 @@ Las llamadas se miden con los contadores del propio código (`LLMClient.stats` p
 | Ejecución | Llamadas LLM | Reintentos | Tokens | Duración | Fuente |
 |---|---|---|---|---|---|
 | Golden set v1 (13 casos, `eval/run_eval.py`) | 65 | 0 | 119.912 | 14 min 38 s (12:53:51 a 13:08:29, -03:00) | `eval/results_v1.json` (medido) |
-| Notebook completo (Secciones 0 a 10, `RUN_EVAL = False`), con Gemini y Google | <<MEDIR: llamadas notebook>> | <<MEDIR: reintentos notebook>> | <<MEDIR: tokens notebook>> | <<MEDIR: duración notebook>> | Celda «Resumen de consumo» de la corrida real |
+| Notebook completo (Secciones 0 a 10, `RUN_EVAL = False`), con Gemini y Google | 73 (2 fallidas tras agotar reintentos) | 42, todos 503 `UNAVAILABLE` (ningún 429) | 137.042 | ~24 min (1.450 s) | Celda «Resumen de consumo» de `notebooks/demo_executed.ipynb` (2026-10-01) |
 
 Referencia de las verificaciones reales anteriores, ya registradas en `docs/dev_prompts.md`: las celdas equivalentes del notebook consumieron 3 llamadas (Sección 2), 5 (Etapa 6, con Google), 9 (Etapa 7), 8 (Etapa 8), 10 (Etapa 9), 18 (Etapa 10) y 14 (Etapa 11), 67 en total. Las de las Etapas 6 a 10 se midieron antes de agregar el juez, que suma una llamada por cada análisis de recibo; por eso el total del notebook completo será mayor. **[SUPUESTO]** Es una referencia, no una medición del notebook final.
 
-**Comparación con los límites gratuitos.** Los límites dependen del modelo y de la cuenta, y Google no publica cifras fijas por modelo en su documentación ([rate limits](https://ai.google.dev/gemini-api/docs/rate-limits)). Cada cuenta consulta los suyos en [AI Studio](https://aistudio.google.com/rate-limit); este repositorio no inventa cifras. Observación del autor en AI Studio: <<MEDIR: límites vistos en AI Studio (solicitudes por minuto, por día) y fecha de la consulta>>. Resultado frente al consumo: <<MEDIR: conclusión de la comparación y reintentos 429 observados>>.
+**Comparación con los límites gratuitos.** Los límites dependen del modelo y de la cuenta, y Google no publica cifras fijas por modelo en su documentación ([rate limits](https://ai.google.dev/gemini-api/docs/rate-limits)). Cada cuenta consulta los suyos en [AI Studio](https://aistudio.google.com/rate-limit); este repositorio no inventa cifras. Observación del autor en AI Studio: **pendiente**. El agente de desarrollo no tiene acceso a la cuenta del autor, así que no se registra ninguna cifra.
+
+Resultado frente al consumo (observado el 2026-10-01): en la misma jornada se ejecutaron el notebook completo (73 llamadas), el golden set (65) y las verificaciones de las Etapas 3 a 11, y no apareció ningún 429 por cuota con `gemini-3.5-flash-lite`. Los únicos 429 de todo el desarrollo ocurrieron en la primera prueba de la Etapa 3, con un ID de modelo equivocado. Sí aparecieron errores 503 `UNAVAILABLE`, que son sobrecarga transitoria del servicio de Google: en la corrida del notebook dos llamadas fallaron tras 5 reintentos, y el notebook lo informó con honestidad, sin inventar datos. Si al revisor le pasa lo mismo, basta con volver a ejecutar esa celda o subir `LLM_MAX_RETRIES` en `.env`.
 
 **Si se agota el límite diario.** Después de la Sección 0 las secciones del notebook son independientes: se ejecuta la Sección 0 y luego solo las secciones pendientes (por ejemplo, 2 a 6 un día y 7 a 10 el siguiente; cada celda con LLM se omite sola si falta la clave). El golden set se reanuda con `--resume` (los casos cortados por cuota quedan `PENDIENTE`, nunca `FALLIDO`).
 
@@ -201,7 +203,7 @@ Referencia de las verificaciones reales anteriores, ya registradas en `docs/dev_
 | 11 | Juez LLM | Completada |
 | 12 | Golden set | Completada (v1: 13/13) |
 | 13 | Demo Telegram | Implementada — prueba manual pendiente (decisión del autor) |
-| 14 | Notebook final y entrega | En curso |
+| 14 | Notebook final y entrega | Completada; pendientes del autor: límites en AI Studio y la línea de `.env.example` |
 
 ## Entregables
 
