@@ -19,6 +19,17 @@ Condiciones de parada (evento `STOP`, campo `reason`):
 - `max_steps`: se alcanzó el límite de decisiones sin respuesta final.
 - `error_llm`: la API falló tras agotar los reintentos.
 - `respuesta_vacia`: el LLM no devolvió texto ni llamadas.
+
+Historial (Etapa 7): con `run(..., conversation=Conversation())` el agente antepone
+al turno TODOS los mensajes previos y, al terminar, agrega a la conversación lo
+nuevo de la ejecución (mensaje del usuario, contenido del modelo sin modificar,
+llamadas y observaciones). Si la parada NO es `respuesta_final` (`max_steps`,
+`error_llm`, `respuesta_vacia`), se agrega además un mensaje del modelo con el
+texto seguro que se entregó al usuario, para que los roles sigan alternando y el
+LLM sepa en el turno siguiente qué se le respondió; el `Content` vacío o la
+llamada a tool no ejecutada del modelo nunca se agregan. Si `run` lanza una
+excepción inesperada, el historial no se modifica. Sin `conversation` el
+comportamiento es el de un solo turno (Etapa 6).
 """
 from __future__ import annotations
 
@@ -27,14 +38,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from app.conversation import Conversation
 from app.llm import AGENT_TEMPERATURE, LLMCallError, LLMClient
 from app.models import ALLOWED_CATEGORIES, CONFIDENCE_THRESHOLD, UNKNOWN, EventType, ReceiptData, TraceEvent
 from app.prompts import SECURITY_SCOPE_ID
 from app.trace import Tracer
 
 MAX_STEPS = 6
-AGENT_PROMPT_ID = "AGENT_PROMPT_v1"
-IMAGE_ID = "img_1"  # identificador de la imagen adjunta; el LLM nunca recibe bytes
+AGENT_PROMPT_ID = "AGENT_PROMPT_v2"
+IMAGE_ID = "img_1"  # identificador de la imagen sin conversación; el LLM nunca recibe bytes
 
 STOP_FINAL = "respuesta_final"
 STOP_MAX_STEPS = "max_steps"
@@ -117,7 +129,7 @@ class AgentResult:
     steps: int  # decisiones del LLM realizadas
     tool_calls: list[dict[str, Any]] = field(default_factory=list)  # {name, args, ok, executed}
     events: list[TraceEvent] = field(default_factory=list)
-    messages: list[Any] = field(default_factory=list)  # historial (para la Etapa 7)
+    messages: list[Any] = field(default_factory=list)  # mensajes enviados al LLM (historial + turno)
 
     @property
     def tool_sequence(self) -> list[str]:
@@ -130,6 +142,7 @@ class _RunContext:
     """Estado de UNA ejecución, usado por los rieles de código."""
 
     image_path: Optional[Path]
+    image_id: str = IMAGE_ID  # identificador de la imagen de ESTE turno
     analysis: Optional[ReceiptData] = None
     drive_links: set[str] = field(default_factory=set)
     registered_row: Optional[int] = None
@@ -177,11 +190,16 @@ class _Dispatcher:
             return {"ok": False, "error": f"Falló la herramienta ({type(error).__name__})."}
 
     # -- tools -------------------------------------------------------------------
-    def _image_error(self, image_id: Any = IMAGE_ID) -> Optional[dict[str, Any]]:
+    def _image_error(self, image_id: Any = None) -> Optional[dict[str, Any]]:
         if self.ctx.image_path is None:
             return {"ok": False, "error": "No hay ninguna imagen adjunta en este mensaje."}
-        if image_id != IMAGE_ID:
-            return {"ok": False, "error": f"image_id desconocido: {image_id}. Usa {IMAGE_ID}."}
+        if image_id is None:
+            image_id = self.ctx.image_id
+        if image_id != self.ctx.image_id:
+            return {
+                "ok": False,
+                "error": f"image_id desconocido: {image_id}. Usa {self.ctx.image_id}.",
+            }
         return None
 
     def _do_analizar_recibo(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -295,6 +313,20 @@ def _safe_max_steps_message(ctx: _RunContext) -> str:
     )
 
 
+def _commit_turn(
+    conversation: Conversation, new_messages: list[Any], stop_reason: str, final_text: str
+) -> None:
+    """Agrega a la conversación lo nuevo de una ejecución (ver docstring del módulo)."""
+    from google.genai import types
+
+    messages = list(new_messages)
+    if stop_reason != STOP_FINAL:
+        if stop_reason == STOP_EMPTY and messages and getattr(messages[-1], "role", None) == "model":
+            messages.pop()  # un Content de modelo sin texto ni llamadas no se reenvía
+        messages.append(types.Content(role="model", parts=[types.Part(text=final_text)]))
+    conversation.contents.extend(messages)
+
+
 class ExpenseAgent:
     """Agente de gastos con loop ReAct propio sobre function calling nativo."""
 
@@ -317,7 +349,7 @@ class ExpenseAgent:
         tracer: Optional[Tracer] = None,
         llm: Optional[LLMClient] = None,
         tool_overrides: Optional[dict[str, ToolFn]] = None,
-        history: Optional[list[Any]] = None,
+        conversation: Optional[Conversation] = None,
     ) -> AgentResult:
         """Ejecuta el loop para un mensaje del usuario.
 
@@ -330,8 +362,10 @@ class ExpenseAgent:
                 (pruebas). `analizar_recibo(path) -> ReceiptData`,
                 `guardar_recibo(path, comercio, fecha) -> DriveResult`,
                 `registrar_gasto(**args) -> SheetResult`.
-            history: mensajes previos (`Content`) que se anteponen al turno. La
-                persistencia entre turnos se implementa en la Etapa 7.
+            conversation: historial de la conversación. Sus mensajes se anteponen
+                al turno y, al terminar (con cualquier motivo de parada), se le
+                agrega lo nuevo. Sin él, la ejecución es de un solo turno. La
+                instrucción de sistema se envía en cada llamada y NO se guarda.
         """
         from google.genai import types
 
@@ -342,19 +376,25 @@ class ExpenseAgent:
         first_event = len(tracer.events)
 
         path = Path(image_path) if image_path is not None else None
-        ctx = _RunContext(image_path=path)
+        prior: list[Any] = list(conversation.contents) if conversation is not None else []
+        turn = conversation.start_turn() if conversation is not None else 1
+        image_id = IMAGE_ID
+        if conversation is not None and path is not None:
+            image_id = conversation.register_image(path)
+        ctx = _RunContext(image_path=path, image_id=image_id)
         dispatcher = _Dispatcher(ctx, llm, overrides)
         tools = build_tool_declarations()
 
         tracer.record(
             EventType.USER_INPUT,
             {"text": user_text, "has_image": path is not None,
-             "image_id": IMAGE_ID if path is not None else None},
+             "image_id": image_id if path is not None else None,
+             "turn": turn, "history_messages": len(prior)},
         )
         text = user_text
         if path is not None:
-            text += f"\n[Adjunto: imagen de un recibo, image_id={IMAGE_ID}]"
-        contents: list[Any] = list(history or [])
+            text += f"\n[Adjunto: imagen de un recibo, image_id={image_id}]"
+        contents: list[Any] = list(prior)
         contents.append(types.Content(role="user", parts=[types.Part(text=text)]))
 
         tool_calls: list[dict[str, Any]] = []
@@ -430,6 +470,8 @@ class ExpenseAgent:
             # Las observaciones vuelven al LLM con rol "user" (convención del SDK).
             contents.append(types.Content(role="user", parts=response_parts))
 
+        if conversation is not None:
+            _commit_turn(conversation, contents[len(prior):], stop_reason, final_text)
         tracer.record(EventType.FINAL_RESPONSE, {"text": final_text, "stop_reason": stop_reason})
         return AgentResult(
             final_text=final_text,

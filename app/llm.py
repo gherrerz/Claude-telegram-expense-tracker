@@ -257,6 +257,8 @@ class LLMClient:
 
         self._call_seq += 1
         call_id = self._call_seq
+        # Mensajes (`Content`) enviados en la llamada con tools: historial + turno.
+        history = {"history_messages": len(contents)} if kind == "tools" else {}
         self.stats.calls += 1
         started = self._clock()
         attempts = 0
@@ -301,6 +303,7 @@ class LLMClient:
                         "error_status": status,
                         "attempts": attempts,
                         "system_prompt_id": system_prompt_id,
+                        **history,
                     },
                 )
                 raise LLMCallError(code, status, attempts) from error
@@ -320,6 +323,7 @@ class LLMClient:
                 "status": "ok",
                 "system_prompt_id": system_prompt_id,
                 "security_scope_id": SECURITY_SCOPE_ID,
+                **history,
                 "params": {
                     "temperature": temperature,
                     "thinking_level": thinking_level,

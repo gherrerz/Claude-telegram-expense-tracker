@@ -71,7 +71,8 @@ sequenceDiagram
 | Cliente LLM | `app/llm.py` | Cliente único de Gemini con reintentos ante 429, pausa entre llamadas y contador de uso. |
 | Prompts | `app/prompts.py` | Todos los prompts del sistema, versionados. |
 | Router | `app/router.py` | Clasifica la entrada en una de 4 rutas. |
-| Agente | `app/agent.py` | Loop ReAct, condiciones de parada y rieles (Etapa 6); historial, juez y memoria se agregan en etapas posteriores. |
+| Agente | `app/agent.py` | Loop ReAct, condiciones de parada y rieles (Etapa 6); reenvía el historial de la conversación (Etapa 7); juez y memoria avanzada se agregan en etapas posteriores. |
+| Conversación | `app/conversation.py` | Historial simple: mensajes del SDK tal como se enviaron y recibieron, turno actual y registro de imágenes (`img_N`). |
 | Juez | `app/judge.py` | Control independiente entre el análisis y el registro. |
 | Tools | `app/tools/*.py` | `analizar_recibo`, `guardar_recibo`, `registrar_gasto`. |
 | Demo | `app/telegram_bot.py` | Adaptador de Telegram sobre el mismo agente. |
@@ -83,12 +84,12 @@ Todas las llamadas incluyen el bloque `SECURITY_SCOPE_v1` (alcance y acciones pe
 | Llamada | Prompt | Entrada | Salida | Tools expuestas |
 |---|---|---|---|---|
 | Router | `ROUTER_PROMPT_v1` | Texto del usuario + indicador de imagen | JSON `{ruta, motivo}` | Ninguna |
-| Agente ReAct | `AGENT_PROMPT_v1` | Historial + observaciones | Tool call o respuesta final | `analizar_recibo`, `guardar_recibo`, `registrar_gasto` |
+| Agente ReAct | `AGENT_PROMPT_v2` | Historial + observaciones | Tool call o respuesta final | `analizar_recibo`, `guardar_recibo`, `registrar_gasto` |
 | Analizador | `ANALYZER_PROMPT_v1` | Imagen | JSON con schema `ReceiptData` | Ninguna |
 | Juez | `JUDGE_PROMPT_v1` | Imagen + datos extraídos | JSON `{veredicto, motivo}` | Ninguna |
 
 ## 6. Memoria
-- **Historial simple:** lista de mensajes por conversación, reenviada completa al LLM en cada turno.
+- **Historial simple (Etapa 7):** `Conversation` en `app/conversation.py` guarda la lista de mensajes por conversación y `ExpenseAgent.run(..., conversation=conv)` la reenvía completa al LLM en cada turno. Se conservan sin modificar el contenido del modelo (firmas de pensamiento), las llamadas a tools y sus observaciones. La instrucción de sistema se envía en cada llamada y no se guarda. El código no extrae datos del historial (el nombre solo viaja en los mensajes). Si el turno termina por `max_steps`, `error_llm` o `respuesta_vacia`, se agrega al historial el texto seguro entregado al usuario para que los roles sigan alternando. La traza registra `turn` y `history_messages` en `USER_INPUT` y `history_messages` en cada `LLM_DECISION`. Los rieles de las tools siguen acotados a una ejecución de `run()`.
 - **Memoria avanzada (`AgentState`):** estado estructurado y separado del historial: `nombre_usuario`, `totales_por_categoria`, `ultimos_gastos` y `recibos_registrados` (huella para detectar duplicados). Se actualiza tras cada registro y se usa para responder consultas y para frenar duplicados. La persistencia en `state/` es opcional.
 
 ## 7. Condiciones de parada
