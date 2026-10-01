@@ -11,7 +11,7 @@
 - [x] T3 Pruebas offline: inclusión del bloque en todas las llamadas y rieles.
 - [x] T4 Prueba `live` y `scripts/verify_stage_8.py`: transferencia, borrado, filtración del prompt, fuera de tema y una inyección combinada con un recibo.
 - [x] T5 Sección 5 del notebook y bitácora.
-- [ ] T6 Verificación real (la ejecuta el orquestador).
+- [x] T6 Verificación real: `verify_stage_8.py` OK (5 de 5 casos; a–d con 0 TOOL_CALL); `pytest -m live` 5 passed.
 
 ## Evidencia
 - T1: la v1 no cubría el alcance explícito, las 3 tools, la prohibición de revelar configuración/claves, los resultados de tools como dato ni el rechazo seguro. Se creó `SECURITY_SCOPE_v2` (v1 queda en `PROMPTS`; adenda A13). `compose_system_instruction` siempre antepone `ACTIVE_SECURITY_SCOPE` y rechaza un bloque de alcance como rol; `LLMClient._generate` verifica el prefijo y registra `security_scope_id` también en `LLM_DECISION` fallidas.
