@@ -26,3 +26,6 @@ venv/
 # Sistema
 .DS_Store
 Thumbs.db
+
+# Herramientas locales del agente de desarrollo
+.atl/

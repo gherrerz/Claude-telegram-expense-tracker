@@ -114,7 +114,7 @@ Eventos: `USER_INPUT`, `ROUTE`, `LLM_DECISION`, `TOOL_CALL`, `TOOL_RESULT`, `JUD
 
 | Rol | Modelo | Acceso | Quién paga |
 |---|---|---|---|
-| Ejecución (todas las llamadas del agente) | Gemini Flash, capa gratuita. ID exacto: **pendiente de confirmación en la Etapa 3** | SDK oficial de Gemini con `GEMINI_API_KEY` | Nadie (gratuito) |
+| Ejecución (todas las llamadas del agente) | Gemini Flash, capa gratuita. ID exacto: **`gemini-3.5-flash-lite`** (confirmado por el autor el 2026-09-30; verificación real pendiente) | SDK oficial de Gemini con `GEMINI_API_KEY` | Nadie (gratuito) |
 | Desarrollo | Claude (claude.ai), según la adenda A1 de `docs/dev_prompts.md` | — | El autor |
 
 ## 11. Decisiones y compromisos

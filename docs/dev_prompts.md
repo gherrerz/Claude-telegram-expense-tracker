@@ -47,3 +47,13 @@ La rúbrica pide adjuntar los prompts o instrucciones usados para desarrollar el
 - **Instrucción del autor:** "Python 3.12 y arrancá la Etapa 2".
 - **Prompt aplicado:** `docs/prompt_maestro_v2.md`, sección "ETAPA 2", con la adenda A9 (Python 3.12).
 - **Resultado:** `requirements.txt`, `app/config.py`, `app/models.py`, `app/trace.py`, pruebas `tests/test_stage2_*.py` y Sección 0 del notebook. Ver `odd/tasks/etapa-2-base-trazador.md` para la evidencia y el reporte de cierre de la Etapa 2.
+
+### Etapa 3 — LLM con visión y tool analizar_recibo
+- **Fecha:** 2026-09-30
+- **Modelo de desarrollo:** Claude Code, `claude-opus-5-5` (orquestador) y un subagente `sonnet` (escritor).
+- **Instrucción del autor:** "sí, usá gemini-3.5-flash-lite y seguí con la Etapa 3".
+- **Prompt aplicado:** `docs/prompt_maestro_v2.md`, sección "ETAPA 3".
+- **Decisión de modelo:** el autor confirmó `gemini-3.5-flash-lite` como modelo de ejecución. Fuentes: https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite y https://ai.google.dev/gemini-api/docs/pricing. El código lo lee de `LLM_MODEL`; no está escrito en `app/`. SDK `google-genai==2.26.0` (fijado `<3.0.0` por recomendación de Google).
+- **Advertencia de temperatura:** el prompt maestro pide temperatura 0 en extracción, pero Google recomienda 1.0 en Gemini 3 (bajarla puede causar bucles): https://ai.google.dev/gemini-api/docs/gemini-3. Queda como constante `EXTRACTION_TEMPERATURE = 0.0` en `app/llm.py`, **pendiente de verificación real**; `scripts/verify_stage_3.py` compara 0.0 frente a 1.0.
+- **Resultado:** `app/prompts.py`, `app/llm.py`, `app/tools/analyzer.py`, recibos sintéticos con `scripts/generate_receipts.py` y `data/README.md`, pruebas `tests/test_stage3_*.py` (las `live` se omiten sin credenciales), `scripts/verify_stage_3.py` y Sección 2 del notebook. Ver `odd/tasks/etapa-3-llm-vision.md`.
+- **Estado:** IMPLEMENTADA — VERIFICACIÓN REAL PENDIENTE (adenda A2/A7).

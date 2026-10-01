@@ -27,7 +27,7 @@ Proyecto académico: tarea final del curso de agentes de IA. La entrega evaluada
 |---|---|---|
 | 1 | Caso, criterio de éxito y arquitectura | Entregada |
 | 2 | Proyecto Python base y trazador | Implementada (pendiente de cierre) |
-| 3 | LLM con visión y `analizar_recibo` | Pendiente |
+| 3 | LLM con visión y `analizar_recibo` | Implementada — verificación real pendiente |
 | 4 | `guardar_recibo` (Drive) | Pendiente |
 | 5 | `registrar_gasto` (Sheets) | Pendiente |
 | 6 | Loop ReAct | Pendiente |
@@ -49,7 +49,25 @@ py -3.12 -m venv .venv
 .venv\Scripts\python -m pytest -q
 ```
 
-Copia `.env.example` a `.env` y completa los valores. Las pruebas y el notebook de la Etapa 2 funcionan sin `.env` y sin red.
+Copia `.env.example` a `.env` y completa los valores (`LLM_MODEL=gemini-3.5-flash-lite`). Las pruebas offline y el notebook funcionan sin `.env` y sin red: las llamadas reales se omiten con un aviso.
+
+### Cómo ejecutar (Etapa 3)
+
+```powershell
+# Pruebas offline (las marcadas `live` se omiten si faltan GEMINI_API_KEY o LLM_MODEL)
+.venv\Scripts\python -m pytest -q
+
+# Pruebas en vivo contra la API real (consumen llamadas de la capa gratuita)
+.venv\Scripts\python -m pytest -m live -v
+
+# Verificación real: humo de texto, visión y temperatura 0.0 frente a 1.0
+.venv\Scripts\python scripts\verify_stage_3.py
+
+# Regenerar los recibos sintéticos de data/receipts/
+.venv\Scripts\python scripts\generate_receipts.py
+```
+
+Con `.env` completo, `pytest -q` también ejecuta las pruebas `live`; para evitarlo usa `pytest -m "not live"`.
 
 ## Requisitos (previstos)
 - Python 3.12.
