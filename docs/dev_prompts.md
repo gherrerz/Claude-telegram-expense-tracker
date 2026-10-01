@@ -264,3 +264,25 @@ La rúbrica pide adjuntar los prompts o instrucciones usados para desarrollar el
 - **Verificación:** pruebas offline sin red. La prueba manual con el token real y la transcripción de la traza están pendientes.
 - **Decisión del autor (2026-10-01, instrucción "saltemos la prueba manual de telegram, despues la realizo, ahora continua con la siguiente etapa"):** la prueba manual queda para más adelante. La demo no es evidencia evaluada.
 - **Estado:** IMPLEMENTADA — PRUEBA MANUAL PENDIENTE.
+
+### Etapa 14 — Notebook final, entrega y revisión contra la rúbrica
+- **Fecha:** 2026-10-01
+- **Modelo de desarrollo:** Claude Code, `claude-opus-5-5` (orquestador) y un subagente `sonnet` (escritor).
+- **Instrucción del autor:** "saltemos la prueba manual de telegram, despues la realizo, ahora continua con la siguiente etapa".
+- **Prompt aplicado:** `docs/prompt_maestro_v2.md`, sección "ETAPA 14".
+- **Decisiones de diseño:**
+  - Orden del notebook: las secciones ya seguían el orden de la rúbrica (0 Setup y ficha, 1 Caso, 2 LLM y prompts, 3 ReAct, 4 Historial, 5 Seguridad, 6 Router, 7 Memoria, 8 Acción, 9 Juez, 10 Golden set), así que no se movió ninguna celda. Se actualizaron la portada y el índice, se quitó la nota «esta sección se agrega al final por ahora» de la Sección 8 y se corrigieron los identificadores de prompt desactualizados en el texto de las Secciones 2, 4 y 6 (`AGENT_PROMPT_v3`, `ROUTER_PROMPT_v2`, `QUERY_PROMPT_v2`, `CHAT_PROMPT_v2`) y la frase «pendiente de verificación real» de la temperatura de extracción (verificada en la Etapa 3).
+  - Ficha de reproducción en la Sección 0 del notebook y en el README, con el mismo texto (se genera de una sola fuente): modelo y parámetros por tipo de llamada, prompts en uso, modelo de desarrollo declarado aparte, dependencias, variables, datos y cómo ejecutar. Una celda imprime los identificadores y parámetros leídos del código y el ID configurado en `LLM_MODEL`.
+  - Independencia de las secciones: `RECEIPTS` y `json` se definen en la Sección 0, de modo que, tras ella, cada sección corre sola (se comprobó ejecutando la Sección 0 más cada sección por separado, con la configuración en blanco).
+  - Consumo: `app/llm.py` agrega un acumulador de proceso (`_SESSION_STATS`, `session_stats()` que devuelve una copia y `reset_session_stats()`), que cada `LLMClient` actualiza junto con su `stats` mediante `LLMClient._count`. Solo suma lo que el cliente ya contaba; no cambia ninguna llamada ni parámetro. La última celda del notebook, «Resumen de consumo», imprime llamadas, reintentos, solicitudes a la API y tokens de toda la sesión, y el mapa de celdas por sección que usa el checklist.
+  - `docs/checklist_rubrica.md` marca `CUMPLE` solo donde la bitácora registra una verificación real; la ejecución completa del notebook, la medición y la comparación con los límites quedan `PENDIENTE DE CORRIDA FINAL`. Los marcadores `<<MEDIR: …>>` del README son solo para cifras que mide el orquestador; no se inventó ningún número.
+  - `docs/bonos.md`: se actualizaron los identificadores de prompt del router y las líneas «Estado» que decían «evidencia real pendiente» con las verificaciones reales de las Etapas 5, 9, 10 y 11.
+- **Resultado:** `notebooks/demo.ipynb` (53 celdas, sin salidas), `app/llm.py` (acumulador), `tests/test_stage14_session.py`, `docs/setup_llm.md`, `docs/trace_examples.md`, `docs/checklist_rubrica.md`, README con la ficha, el consumo y los entregables, y ajustes en `docs/bonos.md`. Ver `odd/tasks/etapa-14-final.md`.
+- **Verificación (escritor):** `pytest -q -m "not live"` con las variables en blanco: 468 passed y 1 failed. La falla conocida es `.env.example` sin `TELEGRAM_ALLOWED_CHAT_IDS` (`test_stage2_config.py`), que el autor corrige (el agente de desarrollo no puede leer ni editar `.env*`). `nbconvert --execute` del notebook reordenado con las variables en blanco: sin errores, 53 celdas, las celdas con LLM omitidas con aviso. Sin llamadas reales.
+- **Verificación real:** pendiente. El orquestador ejecuta el notebook completo con credenciales reales, mide las llamadas y completa «Consumo medido» en el README y el checklist.
+- **Ejecución real (2026-10-01):** `nbconvert --execute` de `notebooks/demo.ipynb` con Gemini, Drive y Sheets, en un kernel limpio, terminó con código de salida 0. Las 53 celdas corrieron sin errores y ninguna sección quedó «omitido»; el resultado es `notebooks/demo_executed.ipynb`, y se revisó que no contenga secretos.
+  - Consumo: 73 llamadas LLM, 137.042 tokens y unos 24 min.
+  - Hubo 42 reintentos, todos 503 `UNAVAILABLE`, y 2 llamadas fallaron tras agotarlos. El notebook las informó con honestidad y todas las comprobaciones de la rúbrica se cumplieron (por ejemplo, la Sección 4 confirma "Diego" con historial y su ausencia sin historial).
+  - Ningún 429 por cuota. Las cifras se registraron en el README («Consumo medido») y en `docs/checklist_rubrica.md`.
+- **Pendientes del autor:** los límites que muestra AI Studio para su cuenta, la línea `TELEGRAM_ALLOWED_CHAT_IDS=` en `.env.example` y la prueba manual de Telegram.
+- **Estado:** COMPLETADA (con los pendientes del autor indicados).
