@@ -15,7 +15,7 @@ from app.models import (
     ReceiptData,
     SheetResult,
 )
-from app.prompts import AGENT_PROMPT_v2, SECURITY_SCOPE_v1
+from app.prompts import AGENT_PROMPT_v2, SECURITY_SCOPE_v2
 from app.trace import Tracer
 
 IMAGE = Path(__file__).resolve().parents[1] / "data" / "receipts" / "receipt_normal.jpg"
@@ -152,7 +152,7 @@ def test_agent_call_declares_tools_security_scope_and_temperature():
     assert config.tool_config.function_calling_config.mode.value == "AUTO"
     assert config.automatic_function_calling.disable is True
     assert config.temperature == AGENT_TEMPERATURE
-    assert config.system_instruction.startswith(SECURITY_SCOPE_v1)
+    assert config.system_instruction.startswith(SECURITY_SCOPE_v2)
     assert AGENT_PROMPT_v2 in config.system_instruction
     decision = [e for e in tracer.events if e.event_type == EventType.LLM_DECISION][0].data
     assert decision["system_prompt_id"] == "AGENT_PROMPT_v2"
@@ -309,7 +309,8 @@ def test_degraded_mode_without_google_returns_error_observation_and_honest_answe
     result = agent.run("Registra este recibo", IMAGE)
 
     obs = client.models.calls[2]["contents"][-1].parts[0].function_response.response
-    assert obs["ok"] is False and "DRIVE_FOLDER_ID" in obs["error"] and obs["web_view_link"] is None
+    assert obs["ok"] is False and obs["error"] == "servicio_no_disponible" and obs["web_view_link"] is None
+    assert "DRIVE_FOLDER_ID" not in str(obs)  # el diagnóstico va solo a la traza (Etapa 8)
     assert result.stop_reason == "respuesta_final"
     assert types_of(tracer)[-1] == EventType.FINAL_RESPONSE
     assert not any(c["name"] == "registrar_gasto" for c in result.tool_calls)

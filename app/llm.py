@@ -19,7 +19,7 @@ from typing import Any, Callable, Optional
 
 from app.config import Settings, load_settings
 from app.models import EventType
-from app.prompts import SECURITY_SCOPE_ID, compose_system_instruction
+from app.prompts import ACTIVE_SECURITY_SCOPE, SECURITY_SCOPE_ID, compose_system_instruction
 from app.trace import Tracer
 
 # Temperatura para extracción: 0.0 según el prompt maestro. Google recomienda
@@ -229,8 +229,13 @@ class LLMClient:
     ) -> Any:
         from google.genai import types
 
+        # Garantía estructural: toda llamada pasa por aquí y su instrucción de sistema
+        # siempre empieza con el bloque de alcance vigente (Etapa 8).
+        system_instruction = compose_system_instruction(system_prompt_id)
+        if not system_instruction.startswith(ACTIVE_SECURITY_SCOPE):
+            raise RuntimeError("La instrucción de sistema no incluye el bloque de alcance.")
         config_kwargs: dict[str, Any] = {
-            "system_instruction": compose_system_instruction(system_prompt_id),
+            "system_instruction": system_instruction,
             "temperature": temperature,
             # El ciclo ReAct ejecuta las tools de forma explícita; el SDK nunca
             # debe llamarlas por su cuenta.
@@ -303,6 +308,7 @@ class LLMClient:
                         "error_status": status,
                         "attempts": attempts,
                         "system_prompt_id": system_prompt_id,
+                        "security_scope_id": SECURITY_SCOPE_ID,
                         **history,
                     },
                 )

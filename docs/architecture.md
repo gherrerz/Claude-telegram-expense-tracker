@@ -79,7 +79,7 @@ sequenceDiagram
 
 ## 5. Llamadas al LLM
 
-Todas las llamadas incluyen el bloque `SECURITY_SCOPE_v1` (alcance y acciones permitidas/prohibidas).
+Todas las llamadas incluyen el bloque `SECURITY_SCOPE_v2` (alcance, acciones permitidas/prohibidas y rechazo seguro; la v1 se conserva por trazabilidad, ver A13).
 
 | Llamada | Prompt | Entrada | Salida | Tools expuestas |
 |---|---|---|---|---|
@@ -109,7 +109,7 @@ Todas se registran como evento `STOP` con su motivo, seguido de `FINAL_RESPONSE`
 
 | Capa | Mecanismo | Qué detiene |
 |---|---|---|
-| Basal | `SECURITY_SCOPE_v1` en todas las llamadas | Peticiones fuera de alcance y jailbreaks simples. |
+| Basal | `SECURITY_SCOPE_v2` en todas las llamadas (garantía estructural en `app/llm.py`) y errores de tools saneados (`app/security.py`) | Peticiones fuera de alcance, jailbreaks simples y filtración de rutas o configuración. |
 | Flujo | Router: las rutas `FUERA_DE_ALCANCE`, `CONVERSACION` y `CONSULTAR_GASTOS` no exponen tools de escritura | Ejecución de herramientas cuando no corresponde. |
 | Juez | Veredicto aplicado por código: sin `APROBAR` no se ejecuta `registrar_gasto` | Datos incoherentes e inyección dentro de la imagen. |
 | Validación | `registrar_gasto` valida categoría, monto y que la URL provenga de Drive | Escrituras con datos inválidos. |
