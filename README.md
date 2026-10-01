@@ -33,7 +33,7 @@ Proyecto académico: tarea final del curso de agentes de IA. La entrega evaluada
 | 6 | Loop ReAct | Completada |
 | 7 | Historial simple | Completada |
 | 8 | Seguridad basal | Completada |
-| 9 | Router | Pendiente |
+| 9 | Router | Implementada — verificación real pendiente |
 | 10 | Memoria avanzada | Pendiente |
 | 11 | Juez LLM | Pendiente |
 | 12 | Golden set | Pendiente |
