@@ -33,7 +33,7 @@ from app.llm import ROUTER_TEMPERATURE, LLMCallError, LLMClient
 from app.models import EventType
 from app.trace import Tracer
 
-ROUTER_PROMPT_ID = "ROUTER_PROMPT_v1"
+ROUTER_PROMPT_ID = "ROUTER_PROMPT_v2"
 SCHEMA_NAME = "RouteDecision"
 
 REGISTRAR_RECIBO = "REGISTRAR_RECIBO"
@@ -77,13 +77,20 @@ def _neutralize(text: str) -> str:
     return text.replace("<", "‹").replace(">", "›")
 
 
-def build_router_input(text: str, has_image: bool, recent_context: str) -> str:
-    """Entrada del router: contexto reciente, mensaje y señal de imagen, como datos delimitados."""
+def build_router_input(
+    text: str, has_image: bool, recent_context: str, pending_confirmation: Optional[str] = None
+) -> str:
+    """Entrada del router: contexto, mensaje, imagen y confirmación pendiente, como datos delimitados.
+
+    `pending_confirmation` es el tipo de la confirmación que el código espera del usuario
+    ("duplicado" o "baja_confianza") o `None`. Solo es contexto: el código no corrige la etiqueta.
+    """
     return (
         f"<contexto_reciente>{_neutralize(recent_context.strip()[:MAX_ROUTER_TEXT_CHARS])}"
         f"</contexto_reciente>\n"
         f"<mensaje_usuario>{_neutralize(text.strip()[:MAX_ROUTER_TEXT_CHARS])}</mensaje_usuario>\n"
-        f"<adjunto_imagen>{'si' if has_image else 'no'}</adjunto_imagen>"
+        f"<adjunto_imagen>{'si' if has_image else 'no'}</adjunto_imagen>\n"
+        f"<confirmacion_pendiente>{pending_confirmation or 'ninguna'}</confirmacion_pendiente>"
     )
 
 
@@ -93,6 +100,7 @@ def route_message(
     recent_context: str,
     llm: LLMClient,
     tracer: Optional[Tracer] = None,
+    pending_confirmation: Optional[str] = None,
 ) -> RouteDecision:
     """Clasifica el último mensaje y registra el evento `ROUTE`.
 
@@ -102,11 +110,13 @@ def route_message(
         recent_context: resumen breve de los últimos mensajes ("" si no hay).
         llm: cliente LLM; toda la llamada lleva `SECURITY_SCOPE_v2` por construcción.
         tracer: trazador del evento; por defecto el del cliente LLM.
+        pending_confirmation: tipo de la confirmación pendiente del `AgentState` (Etapa 10) o
+            `None`. Viaja como contexto al prompt; no hay ninguna regla de código sobre la etiqueta.
 
     Nunca lanza por fallas del LLM: devuelve la rama segura con `fallback=True`.
     """
     tracer = tracer if tracer is not None else llm.tracer
-    decision, reason = _classify(text, has_image, recent_context, llm)
+    decision, reason = _classify(text, has_image, recent_context, llm, pending_confirmation)
     tracer.record(
         EventType.ROUTE,
         {
@@ -115,6 +125,7 @@ def route_message(
             "fallback": decision.fallback,
             **({"fallback_reason": reason} if reason else {}),
             "has_image": has_image,
+            **({"pending_confirmation": pending_confirmation} if pending_confirmation else {}),
             "prompt_id": ROUTER_PROMPT_ID,
         },
     )
@@ -122,7 +133,11 @@ def route_message(
 
 
 def _classify(
-    text: str, has_image: bool, recent_context: str, llm: LLMClient
+    text: str,
+    has_image: bool,
+    recent_context: str,
+    llm: LLMClient,
+    pending_confirmation: Optional[str] = None,
 ) -> tuple[RouteDecision, Optional[str]]:
     if not text.strip() and not has_image:
         return (
@@ -132,7 +147,7 @@ def _classify(
     try:
         result = llm.generate_structured(
             system_prompt_id=ROUTER_PROMPT_ID,
-            contents=build_router_input(text, has_image, recent_context),
+            contents=build_router_input(text, has_image, recent_context, pending_confirmation),
             schema=ROUTER_JSON_SCHEMA,
             schema_name=SCHEMA_NAME,
             temperature=ROUTER_TEMPERATURE,

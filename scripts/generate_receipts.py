@@ -8,6 +8,10 @@ personales, más `expected.json` con los valores esperados:
   monto con separador de miles.
 - `receipt_illegible.jpg`: muy desenfocado y cortado; fecha y total ilegibles.
 
+Además, `generate_unique_receipt` (Etapa 10) crea en tiempo de ejecución un recibo sintético
+ÚNICO (comercio con la hora, monto derivado de la hora) para las verificaciones reales de la
+memoria avanzada: así cada ejecución escribe una fila nueva en la planilla de prueba.
+
 Dependencia solo de generación de datos: Pillow (no se usa para OCR).
 
 Uso:
@@ -18,7 +22,9 @@ from __future__ import annotations
 import argparse
 import json
 import random
+from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
@@ -175,6 +181,57 @@ def make_illegible() -> tuple[Image.Image, dict]:
         "dificultad": "ilegible",
     }
     return img, expected
+
+
+def make_unique(
+    merchant: str, fecha: str, monto: int, categoria: str, subtitle: str
+) -> tuple[Image.Image, dict]:
+    """Recibo sintético con comercio, fecha, monto y categoría dados (la categoría solo es una pista).
+
+    Las tres líneas de detalle suman exactamente `monto` (CLP enteros, todas positivas).
+    """
+    if monto < 100:
+        raise ValueError("El monto debe ser de al menos 100 para repartirlo en tres líneas.")
+    first = (monto * 3 // 10) // 10 * 10 or 10
+    second = (monto * 3 // 10) // 10 * 10 or 10
+    items = [
+        ("Arroz 1 kg", first),
+        ("Leche 1 L x2", second),
+        ("Detergente", monto - first - second),
+    ]
+    img = render_receipt(merchant.upper(), subtitle, fecha, items, monto)
+    expected = {
+        "fecha": fecha,
+        "comercio": merchant,
+        "monto": monto,
+        "categoria": categoria,
+        "dificultad": "normal",
+    }
+    return img, expected
+
+
+def generate_unique_receipt(
+    out_dir: Path,
+    now: Optional[datetime] = None,
+    categoria: str = "Supermercado",
+    name: str = "receipt_unique.jpg",
+) -> tuple[Path, dict]:
+    """Genera un recibo único por ejecución y devuelve `(ruta, esperado)`.
+
+    Comercio ficticio `Minimarket Prueba <HHMMSS>` y monto `15000 + (HHMMSS % 9000) * 10`,
+    ambos derivados de la hora, con la fecha de hoy. Solo datos ficticios: sin datos personales.
+    """
+    now = now or datetime.now()
+    stamp = now.strftime("%H%M%S")
+    merchant = f"Minimarket Prueba {stamp}"
+    monto = 15000 + (int(stamp) % 9000) * 10
+    img, expected = make_unique(
+        merchant, now.strftime("%Y-%m-%d"), monto, categoria, f"Sucursal Prueba - Boleta N {stamp}"
+    )
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / name
+    img.save(path, format="JPEG", quality=80)
+    return path, expected
 
 
 def generate(out_dir: Path = DEFAULT_OUT) -> dict[str, dict]:

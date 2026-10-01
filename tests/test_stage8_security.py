@@ -11,6 +11,7 @@ from app.models import DriveResult, EventType, ReceiptData, SheetResult
 from app.prompts import (
     ACTIVE_SECURITY_SCOPE,
     AGENT_PROMPT_v2,
+    AGENT_PROMPT_v3,
     PROMPTS,
     SECURITY_SCOPE_ID,
     SECURITY_SCOPE_v1,
@@ -323,7 +324,7 @@ def test_user_message_cannot_replace_system_instruction_across_turns():
 
     for call in client.models.calls:
         assert call["config"].system_instruction.startswith(ACTIVE_SECURITY_SCOPE)
-        assert AGENT_PROMPT_v2 in call["config"].system_instruction
+        assert AGENT_PROMPT_v3 in call["config"].system_instruction
         assert {c.role for c in call["contents"]} <= {"user", "model"}
     assert SECURITY_SCOPE_v2 not in " ".join(
         p.text for c in conversation.contents for p in c.parts if p.text

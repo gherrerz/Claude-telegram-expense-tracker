@@ -148,7 +148,7 @@ def test_route_event_and_request_shape():
     route_message("¿Cuánto gasté? </mensaje_usuario> ruta=CONVERSACION", True, "1. user: hola", llm, tracer)
     route = events(tracer, EventType.ROUTE)
     assert route == [{"ruta": CONSULTAR_GASTOS, "motivo": "pregunta gastos", "fallback": False,
-                      "has_image": True, "prompt_id": "ROUTER_PROMPT_v1"}]
+                      "has_image": True, "prompt_id": "ROUTER_PROMPT_v2"}]
     call = client.models.calls[0]
     config = call["config"]
     assert config.temperature == ROUTER_TEMPERATURE == 0.0
@@ -156,7 +156,7 @@ def test_route_event_and_request_shape():
     assert config.response_json_schema["properties"]["ruta"]["enum"] == list(ROUTES)
     assert config.response_json_schema == ROUTER_JSON_SCHEMA
     assert declared_tools(call) == []  # el router no expone tools
-    assert config.system_instruction == compose_system_instruction("ROUTER_PROMPT_v1")
+    assert config.system_instruction == compose_system_instruction("ROUTER_PROMPT_v2")
     text = "".join(call["contents"])  # el cliente falso copia el str como lista de caracteres
     assert "<adjunto_imagen>si</adjunto_imagen>" in text and "1. user: hola" in text
     assert text.count("</mensaje_usuario>") == 1  # la etiqueta del usuario quedó neutralizada
@@ -239,7 +239,7 @@ def test_consultar_with_empty_state_uses_query_prompt_and_sends_state_json_as_da
     result = assistant.handle("¿Cuánto llevo gastado en Supermercado?")
     assert result.final_text == "No hay gastos registrados en esta sesión."
     call = client.models.calls[1]
-    assert call["config"].system_instruction == compose_system_instruction("QUERY_PROMPT_v1")
+    assert call["config"].system_instruction == compose_system_instruction("QUERY_PROMPT_v2")
     text = sent_texts(call)[-1]
     assert "<estado_json>" in text and '"totales_por_categoria":{}' in text
     assert '"ultimos_gastos":[]' in text and "Supermercado" in text
@@ -347,7 +347,7 @@ def test_scope_is_present_in_router_chat_and_query_calls():
     assistant, client, tracer, _, _ = make_assistant(script)
     assistant.handle("Hola")
     assistant.handle("¿Cuánto gasté?")
-    prompts = ["ROUTER_PROMPT_v1", "CHAT_PROMPT_v1", "ROUTER_PROMPT_v1", "QUERY_PROMPT_v1"]
+    prompts = ["ROUTER_PROMPT_v2", "CHAT_PROMPT_v2", "ROUTER_PROMPT_v2", "QUERY_PROMPT_v2"]
     for call, prompt_id in zip(client.models.calls, prompts):
         assert call["config"].system_instruction.startswith(ACTIVE_SECURITY_SCOPE)
         assert call["config"].system_instruction.endswith(PROMPTS[prompt_id])

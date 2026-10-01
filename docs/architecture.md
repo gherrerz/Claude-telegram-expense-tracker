@@ -73,7 +73,8 @@ sequenceDiagram
 | Prompts | `app/prompts.py` | Todos los prompts del sistema, versionados. |
 | Router | `app/router.py` | Clasifica la entrada en una de 4 rutas (`route_message`); respaldos seguros y evento `ROUTE`. |
 | Asistente | `app/assistant.py` | `ExpenseAssistant.handle`: punto de entrada único. Clasifica y ejecuta la ruta: ReAct (`REGISTRAR_RECIBO`), respuesta desde el `AgentState` (`CONSULTAR_GASTOS`), respuesta directa (`CONVERSACION`) o rechazo fijo (`FUERA_DE_ALCANCE`). Mantiene el historial en todas las rutas. |
-| Agente | `app/agent.py` | Se usa desde `ExpenseAssistant` en la ruta `REGISTRAR_RECIBO` (y sigue siendo usable directamente). Loop ReAct, condiciones de parada y rieles (Etapa 6); reenvía el historial de la conversación (Etapa 7); juez y memoria avanzada se agregan en etapas posteriores. |
+| Agente | `app/agent.py` | Se usa desde `ExpenseAssistant` en la ruta `REGISTRAR_RECIBO` (y sigue siendo usable directamente). Loop ReAct, condiciones de parada y rieles (Etapa 6); reenvía el historial de la conversación (Etapa 7); con un `AgentState` aplica los rieles de duplicado y confirmación y actualiza la memoria (Etapa 10); el juez se agrega en la Etapa 11. |
+| Memoria | `app/memory.py` | Operaciones sobre `AgentState` (`record_expense`, `set_user_name`, huella del recibo, `is_duplicate`, confirmación pendiente) con evento `MEMORY_UPDATE`. `app/memory_demo.py` agrupa el ciclo de verificación real. |
 | Conversación | `app/conversation.py` | Historial simple: mensajes del SDK tal como se enviaron y recibieron, turno actual y registro de imágenes (`img_N`). |
 | Juez | `app/judge.py` | Control independiente entre el análisis y el registro. |
 | Tools | `app/tools/*.py` | `analizar_recibo`, `guardar_recibo`, `registrar_gasto`. |
@@ -85,17 +86,17 @@ Todas las llamadas incluyen el bloque `SECURITY_SCOPE_v2` (alcance, acciones per
 
 | Llamada | Prompt | Entrada | Salida | Tools expuestas |
 |---|---|---|---|---|
-| Router | `ROUTER_PROMPT_v1` | Texto del usuario + contexto reciente + indicador de imagen | JSON `{ruta, motivo}` (temperatura 0.0) | Ninguna |
-| Consulta | `QUERY_PROMPT_v1` | Historial de solo texto + `AgentState` como dato + pregunta | Texto | Ninguna |
-| Conversación | `CHAT_PROMPT_v1` | Historial de solo texto + mensaje | Texto | Ninguna |
-| Agente ReAct | `AGENT_PROMPT_v2` | Historial + observaciones | Tool call o respuesta final | `analizar_recibo`, `guardar_recibo`, `registrar_gasto` |
+| Router | `ROUTER_PROMPT_v2` | Texto del usuario + contexto reciente + indicador de imagen + tipo de confirmación pendiente | JSON `{ruta, motivo}` (temperatura 0.0) | Ninguna |
+| Consulta | `QUERY_PROMPT_v2` | Historial de solo texto + `AgentState` y total general calculado por código como dato + pregunta | Texto | Ninguna |
+| Conversación | `CHAT_PROMPT_v2` | Historial de solo texto + mensaje (+ nombre conocido) | JSON `{respuesta, nombre_usuario}`; un nombre válido va al `AgentState` | Ninguna |
+| Agente ReAct | `AGENT_PROMPT_v3` | Historial + observaciones (+ bloque `<confirmacion_pendiente>` en el turno de confirmación) | Tool call o respuesta final | `analizar_recibo`, `guardar_recibo`, `registrar_gasto` |
 | Analizador | `ANALYZER_PROMPT_v1` | Imagen | JSON con schema `ReceiptData` | Ninguna |
 | Juez | `JUDGE_PROMPT_v1` | Imagen + datos extraídos | JSON `{veredicto, motivo}` | Ninguna |
 
 ## 6. Memoria
 - **Entre rutas (Etapa 9):** `ExpenseAssistant` agrega a la misma `Conversation` el mensaje del usuario y la respuesta final de cualquier ruta. Las rutas sin tools reciben el historial en versión de solo texto (sin llamadas a función ni observaciones, con mensajes del mismo rol unidos) para que los roles alternen; `REGISTRAR_RECIBO` conserva el historial completo.
 - **Historial simple (Etapa 7):** `Conversation` en `app/conversation.py` guarda la lista de mensajes por conversación y `ExpenseAgent.run(..., conversation=conv)` la reenvía completa al LLM en cada turno. Se conservan sin modificar el contenido del modelo (firmas de pensamiento), las llamadas a tools y sus observaciones. La instrucción de sistema se envía en cada llamada y no se guarda. El código no extrae datos del historial (el nombre solo viaja en los mensajes). Si el turno termina por `max_steps`, `error_llm` o `respuesta_vacia`, se agrega al historial el texto seguro entregado al usuario para que los roles sigan alternando. La traza registra `turn` y `history_messages` en `USER_INPUT` y `history_messages` en cada `LLM_DECISION`. Los rieles de las tools siguen acotados a una ejecución de `run()`.
-- **Memoria avanzada (`AgentState`):** estado estructurado y separado del historial: `nombre_usuario`, `totales_por_categoria`, `ultimos_gastos` y `recibos_registrados` (huella para detectar duplicados). Se actualiza tras cada registro y se usa para responder consultas y para frenar duplicados. La persistencia en `state/` es opcional.
+- **Memoria avanzada (`AgentState`, Etapa 10):** estado estructurado y separado del historial: `nombre_usuario`, `totales_por_categoria`, `ultimos_gastos` (5, el más reciente al final), `recibos_registrados` (huella: hash de la imagen + campos normalizados), `filas_por_recibo` y `confirmacion_pendiente`. Una instancia por conversación, mantenida en `app/memory.py`: la actualiza el código con lo que observa (la escritura confirmada en Sheets; el nombre desde la salida estructurada de `CONVERSACION`), nunca el LLM, y cada cambio emite `MEMORY_UPDATE` con `antes` y `despues`. Dos usos: responder consultas con cifras del estado y frenar duplicados hasta que el usuario confirme en un turno posterior (`confirmado_por_usuario`, regla `pendiente.turno < Conversation.turn`; el duplicado confirmado llama a Sheets con `permitir_duplicado=True`). No hay persistencia en disco (opcional; no implementada).
 
 ## 7. Condiciones de parada
 1. El LLM responde sin solicitar herramientas → respuesta final (`STOP`, motivo `respuesta_final`).
@@ -108,6 +109,7 @@ Todas se registran como evento `STOP` con su motivo, seguido de `FINAL_RESPONSE`
 - Tool desconocida o argumentos faltantes → error como observación; no se ejecuta nada.
 - `guardar_recibo` exige un `analizar_recibo` previo en la misma ejecución.
 - `registrar_gasto` se bloquea si la URL no es un `web_view_link` devuelto por `guardar_recibo` en la misma ejecución, o si el último análisis tiene confianza menor que 0,7 o algún campo "desconocido" (el LLM debe pedir confirmación).
+- Memoria avanzada (Etapa 10, solo con `AgentState`): un recibo ya registrado bloquea `guardar_recibo` y `registrar_gasto` hasta una confirmación del usuario; la baja confianza bloquea `registrar_gasto` hasta una confirmación. `confirmado_por_usuario=true` solo vale con una confirmación pendiente del mismo recibo creada en un turno anterior (en el mismo turno, error como observación). Tras una escritura exitosa se actualiza la memoria y se borra la pendiente; un duplicado reportado por la planilla no se registra como gasto nuevo.
 - Degradación controlada (A12): si faltan las credenciales de Google, las tools devuelven un error estructurado que el LLM recibe como observación; nunca se simula un éxito.
 
 ## 8. Seguridad en capas
