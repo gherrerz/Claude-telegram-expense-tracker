@@ -71,7 +71,7 @@ sequenceDiagram
 | Cliente LLM | `app/llm.py` | Cliente único de Gemini con reintentos ante 429, pausa entre llamadas y contador de uso. |
 | Prompts | `app/prompts.py` | Todos los prompts del sistema, versionados. |
 | Router | `app/router.py` | Clasifica la entrada en una de 4 rutas. |
-| Agente | `app/agent.py` | Loop ReAct, historial, condición de parada y aplicación del veredicto del juez. |
+| Agente | `app/agent.py` | Loop ReAct, condiciones de parada y rieles (Etapa 6); historial, juez y memoria se agregan en etapas posteriores. |
 | Juez | `app/judge.py` | Control independiente entre el análisis y el registro. |
 | Tools | `app/tools/*.py` | `analizar_recibo`, `guardar_recibo`, `registrar_gasto`. |
 | Demo | `app/telegram_bot.py` | Adaptador de Telegram sobre el mismo agente. |
@@ -92,10 +92,17 @@ Todas las llamadas incluyen el bloque `SECURITY_SCOPE_v1` (alcance y acciones pe
 - **Memoria avanzada (`AgentState`):** estado estructurado y separado del historial: `nombre_usuario`, `totales_por_categoria`, `ultimos_gastos` y `recibos_registrados` (huella para detectar duplicados). Se actualiza tras cada registro y se usa para responder consultas y para frenar duplicados. La persistencia en `state/` es opcional.
 
 ## 7. Condiciones de parada
-1. El LLM responde sin solicitar herramientas → respuesta final.
-2. Se alcanzan `MAX_STEPS = 6` iteraciones → respuesta segura predefinida.
+1. El LLM responde sin solicitar herramientas → respuesta final (`STOP`, motivo `respuesta_final`).
+2. Se alcanzan `MAX_STEPS = 6` decisiones del LLM sin respuesta final → respuesta segura (`max_steps`). La tool pedida en la decisión número 6 no se ejecuta, y la respuesta solo afirma lo que el código observó.
+3. Casos de borde, también como `STOP`: `error_llm` (la API falla tras los reintentos) y `respuesta_vacia` (el modelo no devuelve texto ni llamadas).
 
-Ambas se registran como evento `STOP` con su motivo.
+Todas se registran como evento `STOP` con su motivo, seguido de `FINAL_RESPONSE`.
+
+### Rieles del loop (código, no prompt)
+- Tool desconocida o argumentos faltantes → error como observación; no se ejecuta nada.
+- `guardar_recibo` exige un `analizar_recibo` previo en la misma ejecución.
+- `registrar_gasto` se bloquea si la URL no es un `web_view_link` devuelto por `guardar_recibo` en la misma ejecución, o si el último análisis tiene confianza menor que 0,7 o algún campo "desconocido" (el LLM debe pedir confirmación).
+- Degradación controlada (A12): si faltan las credenciales de Google, las tools devuelven un error estructurado que el LLM recibe como observación; nunca se simula un éxito.
 
 ## 8. Seguridad en capas
 

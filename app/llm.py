@@ -28,6 +28,15 @@ from app.trace import Tracer
 # 0.0 y extrae igual que con 1.0 en los 3 recibos, sin bucles ni reintentos.
 EXTRACTION_TEMPERATURE = 0.0
 
+# Temperatura de la decisión del agente (qué tool llamar o cuándo responder).
+# Se elige 0.0 por determinismo, con la misma evidencia de la Etapa 3 (el modelo
+# acepta 0.0 sin bucles en extracción). Google advierte que en Gemini 3 bajar de
+# 1.0 puede degradar el razonamiento o producir bucles; aquí el riesgo está
+# acotado por `MAX_STEPS` (app/agent.py). El comportamiento del loop con 0.0
+# se confirma SOLO en la ejecución real (scripts/verify_stage_6.py); si
+# apareciera un bucle, volver a 1.0 cambiando esta constante.
+AGENT_TEMPERATURE = 0.0
+
 RETRYABLE_CODES = frozenset({429, 503})
 RETRYABLE_STATUSES = frozenset({"RESOURCE_EXHAUSTED", "UNAVAILABLE"})
 BACKOFF_BASE_SECONDS = 2.0
@@ -60,6 +69,32 @@ class UsageStats:
 
     def as_dict(self) -> dict[str, int]:
         return dict(self.__dict__)
+
+
+@dataclass
+class ToolCallRequest:
+    """Llamada a función pedida por el modelo."""
+
+    name: str
+    args: dict[str, Any]
+    id: Optional[str] = None
+
+
+@dataclass
+class ToolLLMResult:
+    """Decisión del modelo con tools: llamadas a función o texto final.
+
+    `content` es el `Content` del candidato SIN modificar: se reenvía tal cual
+    en el historial para conservar las firmas de pensamiento (Gemini 3).
+    """
+
+    text: Optional[str]
+    function_calls: list[ToolCallRequest] = field(default_factory=list)
+    content: Any = None
+    usage: dict[str, int] = field(default_factory=dict)
+    latency_ms: int = 0
+    attempts: int = 1
+    model: str = ""
 
 
 @dataclass
@@ -189,6 +224,8 @@ class LLMClient:
         thinking_level: Optional[str] = None,
         schema: Optional[dict[str, Any]] = None,
         schema_name: Optional[str] = None,
+        tools: Optional[list[Any]] = None,
+        decision_fn: Optional[Callable[[Any], dict[str, Any]]] = None,
     ) -> Any:
         from google.genai import types
 
@@ -204,6 +241,18 @@ class LLMClient:
         if schema is not None:
             config_kwargs["response_mime_type"] = "application/json"
             config_kwargs["response_json_schema"] = schema
+        tool_names: Optional[list[str]] = None
+        if tools:
+            config_kwargs["tools"] = tools
+            # AUTO: el modelo decide entre llamar a una función o responder.
+            config_kwargs["tool_config"] = types.ToolConfig(
+                function_calling_config=types.FunctionCallingConfig(
+                    mode=types.FunctionCallingConfigMode.AUTO
+                )
+            )
+            tool_names = [
+                d.name for tool in tools for d in (tool.function_declarations or [])
+            ]
         config = types.GenerateContentConfig(**config_kwargs)
 
         self._call_seq += 1
@@ -276,7 +325,9 @@ class LLMClient:
                     "thinking_level": thinking_level,
                     "response_mime_type": "application/json" if schema is not None else None,
                     "response_schema": schema_name,
+                    **({"tools": tool_names, "function_calling_mode": "AUTO"} if tool_names else {}),
                 },
+                **({"decision": decision_fn(response)} if decision_fn else {}),
                 "usage": usage,
                 "latency_ms": latency_ms,
                 "attempts": attempts,
@@ -342,3 +393,65 @@ class LLMClient:
             attempts=attempts,
             model=self.model,
         )
+
+    def generate_with_tools(
+        self,
+        contents: Any,
+        tools: list[Any],
+        system_prompt_id: str,
+        temperature: float = AGENT_TEMPERATURE,
+    ) -> ToolLLMResult:
+        """Una decisión del agente con function calling nativo (modo AUTO).
+
+        Devuelve las llamadas a función pedidas (`function_calls`) o el texto
+        final. La traza `LLM_DECISION` incluye la decisión: nombres y argumentos
+        de las llamadas, o `final_text`. El ciclo de ejecución de las tools vive
+        en `app/agent.py`; el SDK nunca las ejecuta por su cuenta.
+        """
+        response, usage, latency, attempts = self._generate(
+            "tools", contents, system_prompt_id, temperature,
+            tools=tools, decision_fn=_describe_decision,
+        )
+        calls = _extract_calls(response)
+        candidates = getattr(response, "candidates", None)
+        content = candidates[0].content if candidates else None
+        return ToolLLMResult(
+            text=_extract_text(content),
+            function_calls=calls,
+            content=content,
+            usage=usage,
+            latency_ms=latency,
+            attempts=attempts,
+            model=self.model,
+        )
+
+
+def _extract_calls(response: Any) -> list[ToolCallRequest]:
+    """Convierte `response.function_calls` del SDK en `ToolCallRequest`."""
+    return [
+        ToolCallRequest(
+            name=call.name or "",
+            args=dict(call.args) if call.args else {},
+            id=getattr(call, "id", None),
+        )
+        for call in (getattr(response, "function_calls", None) or [])
+    ]
+
+
+def _extract_text(content: Any) -> Optional[str]:
+    """Texto visible del contenido (ignora partes de pensamiento y llamadas)."""
+    parts = getattr(content, "parts", None) or []
+    texts = [
+        part.text
+        for part in parts
+        if isinstance(getattr(part, "text", None), str) and not getattr(part, "thought", False)
+    ]
+    return "".join(texts) if texts else None
+
+
+def _describe_decision(response: Any) -> dict[str, Any]:
+    """Decisión para la traza: llamadas a función (nombre y argumentos) o texto final."""
+    calls = _extract_calls(response)
+    if calls:
+        return {"type": "function_calls", "calls": [{"name": c.name, "args": c.args} for c in calls]}
+    return {"type": "final_text"}
