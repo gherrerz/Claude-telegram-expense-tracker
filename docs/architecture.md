@@ -73,10 +73,10 @@ sequenceDiagram
 | Prompts | `app/prompts.py` | Todos los prompts del sistema, versionados. |
 | Router | `app/router.py` | Clasifica la entrada en una de 4 rutas (`route_message`); respaldos seguros y evento `ROUTE`. |
 | Asistente | `app/assistant.py` | `ExpenseAssistant.handle`: punto de entrada único. Clasifica y ejecuta la ruta: ReAct (`REGISTRAR_RECIBO`), respuesta desde el `AgentState` (`CONSULTAR_GASTOS`), respuesta directa (`CONVERSACION`) o rechazo fijo (`FUERA_DE_ALCANCE`). Mantiene el historial en todas las rutas. |
-| Agente | `app/agent.py` | Se usa desde `ExpenseAssistant` en la ruta `REGISTRAR_RECIBO` (y sigue siendo usable directamente). Loop ReAct, condiciones de parada y rieles (Etapa 6); reenvía el historial de la conversación (Etapa 7); con un `AgentState` aplica los rieles de duplicado y confirmación y actualiza la memoria (Etapa 10); el juez se agrega en la Etapa 11. |
+| Agente | `app/agent.py` | Se usa desde `ExpenseAssistant` en la ruta `REGISTRAR_RECIBO` (y sigue siendo usable directamente). Loop ReAct, condiciones de parada y rieles (Etapa 6); reenvía el historial de la conversación (Etapa 7); con un `AgentState` aplica los rieles de duplicado y confirmación y actualiza la memoria (Etapa 10); tras cada `analizar_recibo` llama al juez y aplica su veredicto antes de guardar y registrar (Etapa 11). |
 | Memoria | `app/memory.py` | Operaciones sobre `AgentState` (`record_expense`, `set_user_name`, huella del recibo, `is_duplicate`, confirmación pendiente) con evento `MEMORY_UPDATE`. `app/memory_demo.py` agrupa el ciclo de verificación real. |
 | Conversación | `app/conversation.py` | Historial simple: mensajes del SDK tal como se enviaron y recibieron, turno actual y registro de imágenes (`img_N`). |
-| Juez | `app/judge.py` | Control independiente entre el análisis y el registro. |
+| Juez | `app/judge.py` | Control independiente entre el análisis y el registro (`judge_receipt`): una llamada LLM con solo la imagen y los datos extraídos que devuelve `JudgeVerdict {veredicto, motivo, senales}`; falla cerrada. `app/judge_demo.py` agrupa los casos de verificación (benigno y adversarial). |
 | Tools | `app/tools/*.py` | `analizar_recibo`, `guardar_recibo`, `registrar_gasto`. |
 | Demo | `app/telegram_bot.py` | Adaptador de Telegram sobre el mismo agente. |
 
@@ -91,7 +91,7 @@ Todas las llamadas incluyen el bloque `SECURITY_SCOPE_v2` (alcance, acciones per
 | Conversación | `CHAT_PROMPT_v2` | Historial de solo texto + mensaje (+ nombre conocido) | JSON `{respuesta, nombre_usuario}`; un nombre válido va al `AgentState` | Ninguna |
 | Agente ReAct | `AGENT_PROMPT_v3` | Historial + observaciones (+ bloque `<confirmacion_pendiente>` en el turno de confirmación) | Tool call o respuesta final | `analizar_recibo`, `guardar_recibo`, `registrar_gasto` |
 | Analizador | `ANALYZER_PROMPT_v1` | Imagen | JSON con schema `ReceiptData` | Ninguna |
-| Juez | `JUDGE_PROMPT_v1` | Imagen + datos extraídos | JSON `{veredicto, motivo}` | Ninguna |
+| Juez | `JUDGE_PROMPT_v1` | Imagen + datos extraídos como dato (sin historial ni mensajes del agente) | JSON `{veredicto, motivo, senales}` (temperatura 0.0) | Ninguna |
 
 ## 6. Memoria
 - **Entre rutas (Etapa 9):** `ExpenseAssistant` agrega a la misma `Conversation` el mensaje del usuario y la respuesta final de cualquier ruta. Las rutas sin tools reciben el historial en versión de solo texto (sin llamadas a función ni observaciones, con mensajes del mismo rol unidos) para que los roles alternen; `REGISTRAR_RECIBO` conserva el historial completo.
@@ -110,6 +110,7 @@ Todas se registran como evento `STOP` con su motivo, seguido de `FINAL_RESPONSE`
 - `guardar_recibo` exige un `analizar_recibo` previo en la misma ejecución.
 - `registrar_gasto` se bloquea si la URL no es un `web_view_link` devuelto por `guardar_recibo` en la misma ejecución, o si el último análisis tiene confianza menor que 0,7 o algún campo "desconocido" (el LLM debe pedir confirmación).
 - Memoria avanzada (Etapa 10, solo con `AgentState`): un recibo ya registrado bloquea `guardar_recibo` y `registrar_gasto` hasta una confirmación del usuario; la baja confianza bloquea `registrar_gasto` hasta una confirmación. `confirmado_por_usuario=true` solo vale con una confirmación pendiente del mismo recibo creada en un turno anterior (en el mismo turno, error como observación). Tras una escritura exitosa se actualiza la memoria y se borra la pendiente; un duplicado reportado por la planilla no se registra como gasto nuevo.
+- Juez (Etapa 11): tras cada `analizar_recibo` el código llama al juez; `guardar_recibo` y `registrar_gasto` se bloquean salvo `APROBAR`, o `PEDIR_CONFIRMACION` confirmado por el usuario en un turno posterior (pendiente de tipo `juez`). `RECHAZAR` bloquea de forma definitiva ese recibo (`recibos_rechazados`) y una falla del juez bloquea la ejecución (`juez_no_disponible`).
 - Degradación controlada (A12): si faltan las credenciales de Google, las tools devuelven un error estructurado que el LLM recibe como observación; nunca se simula un éxito.
 
 ## 8. Seguridad en capas
@@ -118,7 +119,7 @@ Todas se registran como evento `STOP` con su motivo, seguido de `FINAL_RESPONSE`
 |---|---|---|
 | Basal | `SECURITY_SCOPE_v2` en todas las llamadas (garantía estructural en `app/llm.py`) y errores de tools saneados (`app/security.py`) | Peticiones fuera de alcance, jailbreaks simples y filtración de rutas o configuración. |
 | Flujo | Router: las rutas `FUERA_DE_ALCANCE`, `CONVERSACION` y `CONSULTAR_GASTOS` no declaran ninguna tool (cero `TOOL_CALL`, verificado en pruebas). No es un filtro: si clasifica mal, el alcance y los rieles siguen activos. `FUERA_DE_ALCANCE` responde con texto fijo, sin LLM | Ejecución de herramientas cuando no corresponde. |
-| Juez | Veredicto aplicado por código: sin `APROBAR` no se ejecuta `registrar_gasto` | Datos incoherentes e inyección dentro de la imagen. |
+| Juez | Veredicto aplicado por código antes de guardar y registrar: `RECHAZAR` bloquea para siempre ese recibo, `PEDIR_CONFIRMACION` exige confirmación en un turno posterior, y una falla del juez bloquea | Datos incoherentes con la imagen e inyección dentro de la imagen. |
 | Validación | `registrar_gasto` valida categoría, monto y que la URL provenga de Drive | Escrituras con datos inválidos. |
 | Credenciales | Variables de entorno; trazador con enmascaramiento | Fuga de secretos en código, trazas o git. |
 

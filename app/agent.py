@@ -41,6 +41,26 @@ partir de lo que observa (nunca de lo que diga el LLM) y aplica dos rieles más:
   nuevo: se informa la fila existente y queda una pendiente `duplicado` para que el usuario pueda
   confirmarlo en un turno posterior. Sin `state` el comportamiento es el de las Etapas 6 a 9.
 
+Juez (Etapa 11): tras CADA `analizar_recibo` exitoso el código llama al juez (`app/judge.py`), una
+llamada LLM independiente que solo ve la imagen y los datos extraídos. No es una tool del LLM: no
+puede omitirlo ni invocarlo. El veredicto se aplica en código antes de `guardar_recibo` y de
+`registrar_gasto`:
+
+- `APROBAR`: se permite guardar y registrar (siguen rigiendo los rieles de las Etapas 6 y 10).
+- `PEDIR_CONFIRMACION`: deja una confirmación pendiente de tipo `juez`; solo un `confirmado_por_usuario`
+  de un turno POSTERIOR la desbloquea (la misma regla de la Etapa 10). Esa confirmación cubre también un
+  duplicado o una confianza baja del mismo recibo, porque la observación los informó juntos. En el
+  turno de confirmación el juez NO se vuelve a ejecutar: el usuario ya aceptó la duda; el veredicto
+  original queda en la traza y en la pendiente.
+- `RECHAZAR`: bloqueo definitivo para ese recibo (misma imagen): se guarda en
+  `state.recibos_rechazados` y ninguna confirmación lo desbloquea; el LLM recibe el error
+  `rechazado_por_juez`. Sin `state` el rechazo vale solo durante la ejecución.
+- Falla del juez: veredicto `RECHAZAR` con la señal `juez_no_disponible`. Bloquea esta ejecución pero no
+  se guarda como rechazo definitivo: el siguiente análisis vuelve a llamar al juez.
+
+El juez de producción es `app.judge.judge_receipt`; se puede inyectar otro (`ExpenseAgent(judge=...)`),
+pero solo código del programador, nunca el LLM.
+
 Historial (Etapa 7): con `run(..., conversation=Conversation())` el agente antepone
 al turno TODOS los mensajes previos y, al terminar, agrega a la conversación lo
 nuevo de la ejecución (mensaje del usuario, contenido del modelo sin modificar,
@@ -61,6 +81,8 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from app.conversation import Conversation
+from app import judge as judge_module
+from app.judge import APROBAR, PEDIR_CONFIRMACION, RECHAZAR, JudgeVerdict, unavailable_verdict
 from app.llm import AGENT_TEMPERATURE, LLMCallError, LLMClient
 from app.memory import (
     build_key,
@@ -69,6 +91,8 @@ from app.memory import (
     image_hash,
     is_duplicate,
     record_expense,
+    reject_receipt,
+    rejected_key,
     same_receipt,
     set_pending_confirmation,
 )
@@ -95,6 +119,7 @@ STOP_LLM_ERROR = "error_llm"
 STOP_EMPTY = "respuesta_vacia"
 
 ToolFn = Callable[..., dict[str, Any]]
+JudgeFn = Callable[..., JudgeVerdict]  # (imagen, datos extraídos, llm, tracer) -> JudgeVerdict
 
 
 _CONFIRMED_PROPERTY = {
@@ -208,6 +233,10 @@ class _RunContext:
     image_hash: Optional[str] = None
     analysis_key: Optional[str] = None  # huella del recibo analizado (o restaurado)
     confirmed_key: Optional[str] = None  # huella cuya confirmación ya se validó en esta ejecución
+    # Juez (Etapa 11).
+    judge: Optional[JudgeVerdict] = None  # veredicto del recibo analizado (o restaurado)
+    judge_confirmed_key: Optional[str] = None  # huella cuyo PEDIR_CONFIRMACION ya se confirmó
+    rejected_keys: set[str] = field(default_factory=set)  # rechazos de esta ejecución (sin `state`)
 
 
 def _needs_confirmation(receipt: ReceiptData) -> Optional[str]:
@@ -239,10 +268,12 @@ class _Dispatcher:
         ctx: _RunContext,
         llm: LLMClient,
         overrides: dict[str, ToolFn],
+        judge: Optional[JudgeFn] = None,
     ) -> None:
         self.ctx = ctx
         self.llm = llm
         self.overrides = overrides
+        self.judge = judge  # `None` = el juez de producción (`app.judge.judge_receipt`)
         self.last_diagnostic: Optional[str] = None  # detalle oculto del último despacho
 
     def dispatch(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -302,8 +333,27 @@ class _Dispatcher:
             "requiere_confirmacion": reason is not None,
             "motivo": reason,
         }
+        self._identify_receipt(receipt)
+        verdict = self._run_judge(receipt)
+        observation["veredicto_juez"] = {
+            "veredicto": verdict.veredicto, "motivo": verdict.motivo, "senales": verdict.senales,
+        }
+        if verdict.veredicto == RECHAZAR:
+            # Los datos de un recibo rechazado no se entregan: el LLM no puede usarlos.
+            observation.pop("datos")
+            observation.update(
+                rechazado_por_juez=not verdict.unavailable,
+                requiere_confirmacion=False,
+                motivo=(
+                    "El control independiente no pudo verificar el recibo; no se registra nada por "
+                    "ahora. Informa al usuario que lo intente de nuevo más tarde."
+                    if verdict.unavailable
+                    else "El control independiente rechazó este recibo: no se guarda ni se registra "
+                    "y ninguna confirmación lo desbloquea. Informa al usuario que no se pudo registrar."
+                ),
+            )
+            return observation
         if self.ctx.state is not None:
-            self._identify_receipt(receipt)
             duplicate, row = self._duplicate_info()
             if duplicate:
                 where = f"en la fila {row}" if row is not None else "en esta conversación"
@@ -320,7 +370,132 @@ class _Dispatcher:
                 )
             elif reason is not None:
                 self._ensure_pending("baja_confianza")
+        if verdict.veredicto == PEDIR_CONFIRMACION:
+            self._ensure_pending("juez")
+            observation.update(
+                requiere_confirmacion=True,
+                motivo=f"el control independiente pide confirmación del usuario: {verdict.motivo}",
+            )
         return observation
+
+    # -- juez (Etapa 11) ------------------------------------------------------------
+    def _is_rejected(self, key: Optional[str]) -> bool:
+        if key is None:
+            return False
+        ctx = self.ctx
+        if any(same_receipt(k, key) for k in ctx.rejected_keys):
+            return True
+        return ctx.state is not None and rejected_key(ctx.state, key) is not None
+
+    def _run_judge(self, receipt: ReceiptData) -> JudgeVerdict:
+        """Llama al juez sobre el recibo analizado y deja el veredicto en el contexto.
+
+        Un recibo ya rechazado (misma imagen) no se vuelve a juzgar: sigue rechazado. Un rechazo
+        genuino (no `juez_no_disponible`) se guarda en el estado de forma definitiva.
+        """
+        ctx = self.ctx
+        key = ctx.analysis_key
+        tracer = ctx.tracer
+        if self._is_rejected(key):
+            verdict = JudgeVerdict(
+                veredicto=RECHAZAR,
+                motivo="El recibo ya había sido rechazado por el juez.",
+                senales=["rechazado_previamente"],
+            )
+            if tracer is not None:
+                tracer.record(EventType.JUDGE_VERDICT, {
+                    "veredicto": verdict.veredicto, "motivo": verdict.motivo,
+                    "senales": verdict.senales, "prompt_id": judge_module.JUDGE_PROMPT_ID,
+                    "model": None, "fallback": False, "reutilizado": True,
+                })
+            ctx.judge = verdict
+            return verdict
+        judge_fn = self.judge or judge_module.judge_receipt
+        try:
+            verdict = judge_fn(ctx.image_path, receipt, self.llm, tracer)
+        except Exception as error:  # noqa: BLE001 - el juez nunca debe romper el ciclo: falla cerrada
+            verdict = unavailable_verdict(f"error {type(error).__name__}")
+        ctx.judge = verdict
+        if verdict.veredicto == RECHAZAR and not verdict.unavailable and key is not None:
+            ctx.rejected_keys.add(key)
+            if ctx.state is not None:
+                reject_receipt(ctx.state, key, tracer=tracer)
+                pending = ctx.state.confirmacion_pendiente
+                if pending is not None and same_receipt(pending.clave, key):
+                    clear_pending_confirmation(
+                        ctx.state, tracer=tracer, motivo="el juez rechazó el recibo"
+                    )
+        return verdict
+
+    def _judge_gate(self, args: dict[str, Any]) -> Optional[dict[str, Any]]:
+        """Riel del juez. Devuelve una observación de error si hay que bloquear, o `None`.
+
+        Va ANTES del riel de confirmación de la Etapa 10 y no depende de lo que diga el LLM.
+        """
+        ctx = self.ctx
+        key = ctx.analysis_key
+        verdict = ctx.judge
+        if self._is_rejected(key) or (
+            verdict is not None and verdict.veredicto == RECHAZAR and not verdict.unavailable
+        ):
+            return {
+                "ok": False,
+                "error": (
+                    "rechazado_por_juez: el control independiente rechazó este recibo. No se guarda "
+                    "ni se registra y ninguna confirmación lo desbloquea. Informa al usuario."
+                ),
+            }
+        if verdict is None or verdict.unavailable:
+            return {
+                "ok": False,
+                "error": (
+                    "Registro bloqueado: el control independiente no pudo verificar este recibo. "
+                    "No se registra nada por ahora; informa al usuario que lo intente más tarde."
+                ),
+            }
+        if verdict.veredicto == APROBAR:
+            return None
+        # PEDIR_CONFIRMACION: solo la confirmación del usuario en un turno posterior desbloquea.
+        if key is not None and ctx.judge_confirmed_key is not None and same_receipt(
+            ctx.judge_confirmed_key, key
+        ):
+            return None
+        state = ctx.state
+        pending = state.confirmacion_pendiente if state is not None else None
+        valid = (
+            pending is not None and pending.tipo == "juez" and key is not None
+            and same_receipt(pending.clave, key)
+        )
+        confirmed = args.get("confirmado_por_usuario") is True
+        if confirmed and valid:
+            assert pending is not None
+            if pending.turno >= ctx.turn:
+                return {
+                    "ok": False,
+                    "error": (
+                        "Confirmación rechazada: la confirmación debe venir del usuario en un mensaje "
+                        "posterior al que la pidió, no en el mismo mensaje. Responde al usuario "
+                        "pidiéndola y espera su respuesta."
+                    ),
+                }
+            ctx.judge_confirmed_key = key
+            return None
+        self._ensure_pending("juez")
+        rejected = (
+            "Confirmación rechazada: no hay una confirmación pendiente de un mensaje anterior "
+            "para este recibo. "
+            if confirmed
+            else ""
+        )
+        return {
+            "ok": False,
+            "error": (
+                f"{rejected}Registro bloqueado: el control independiente pide confirmación del "
+                "usuario. Pídesela; solo en un mensaje posterior podrás reintentar con "
+                "confirmado_por_usuario=true."
+            ),
+            "motivo": verdict.motivo,
+        }
 
     # -- memoria avanzada (Etapa 10) ---------------------------------------------
     def _identify_receipt(self, receipt: ReceiptData) -> None:
@@ -355,6 +530,12 @@ class _Dispatcher:
         ctx = self.ctx
         if ctx.state is None or ctx.analysis is None or ctx.analysis_key is None:
             return
+        current = ctx.state.confirmacion_pendiente
+        if (
+            kind != "juez" and current is not None and current.tipo == "juez"
+            and same_receipt(current.clave, ctx.analysis_key)
+        ):
+            return  # la pendiente del juez cubre también el duplicado y la confianza baja
         set_pending_confirmation(
             ctx.state,
             kind,  # type: ignore[arg-type]
@@ -365,6 +546,7 @@ class _Dispatcher:
             imagen_id=ctx.image_id,
             imagen_hash=ctx.image_hash,
             fila_existente=row,
+            juicio=ctx.judge.model_dump() if ctx.judge is not None else None,
             tracer=ctx.tracer,
         )
 
@@ -398,7 +580,9 @@ class _Dispatcher:
         if ctx.confirmed_key is not None and same_receipt(ctx.confirmed_key, key):
             return None  # la confirmación ya se validó en esta ejecución
         pending = state.confirmacion_pendiente
-        valid = pending is not None and pending.tipo == kind and same_receipt(pending.clave, key)
+        valid = (
+            pending is not None and pending.tipo in (kind, "juez") and same_receipt(pending.clave, key)
+        )  # una pendiente del juez cubre también el duplicado y la confianza baja del mismo recibo
         if args.get("confirmado_por_usuario") is True and valid:
             assert pending is not None
             if pending.turno >= ctx.turn:
@@ -459,7 +643,7 @@ class _Dispatcher:
             return problem
         if self.ctx.analysis is None:
             return {"ok": False, "error": "Primero hay que analizar el recibo con analizar_recibo."}
-        blocked = self._confirmation_gate("guardar_recibo", args)
+        blocked = self._judge_gate(args) or self._confirmation_gate("guardar_recibo", args)
         if blocked is not None:
             return blocked
         if "guardar_recibo" in self.overrides:
@@ -493,7 +677,7 @@ class _Dispatcher:
         # Rieles de código: valen aunque el LLM ignore el prompt.
         if self.ctx.analysis is None:
             return {"ok": False, "error": "Primero hay que analizar el recibo con analizar_recibo."}
-        blocked = self._confirmation_gate("registrar_gasto", args)
+        blocked = self._judge_gate(args) or self._confirmation_gate("registrar_gasto", args)
         if blocked is not None:
             return blocked
         if args["recibo_url"] not in self.ctx.drive_links:
@@ -566,15 +750,21 @@ def _restore_pending(ctx: _RunContext) -> str:
     ctx.analysis = analysis
     ctx.analysis_key = pending.clave
     ctx.image_hash = pending.imagen_hash
-    block = json.dumps(
-        {
-            "tipo": pending.tipo,
-            "fila_existente": pending.fila_existente,
-            "datos": pending.datos,
-            "image_id": ctx.image_id,
-        },
-        ensure_ascii=False,
-    )
+    try:  # el juez NO se vuelve a ejecutar: se restaura el veredicto guardado en la pendiente
+        ctx.judge = JudgeVerdict.model_validate(pending.juicio) if pending.juicio else None
+    except Exception:  # noqa: BLE001 - veredicto corrupto: sin veredicto el riel bloquea
+        ctx.judge = None
+    info: dict[str, Any] = {
+        "tipo": pending.tipo,
+        "fila_existente": pending.fila_existente,
+        "datos": pending.datos,
+        "image_id": ctx.image_id,
+    }
+    if ctx.judge is not None:
+        info["veredicto_juez"] = {
+            "veredicto": ctx.judge.veredicto, "motivo": ctx.judge.motivo, "senales": ctx.judge.senales,
+        }
+    block = json.dumps(info, ensure_ascii=False)
     block = block.replace("<", "‹").replace(">", "›")  # los datos no pueden cerrar la etiqueta
     return (
         f"\n[Sistema: el mensaje anterior pidió confirmar el registro de un recibo ya analizado "
@@ -620,11 +810,14 @@ class ExpenseAgent:
         tracer: Optional[Tracer] = None,
         tool_overrides: Optional[dict[str, ToolFn]] = None,
         max_steps: int = MAX_STEPS,
+        judge: Optional[JudgeFn] = None,
     ) -> None:
         self.llm = llm
         self.tracer = tracer
         self.tool_overrides = dict(tool_overrides or {})
         self.max_steps = max_steps
+        # Solo código del programador puede reemplazar al juez (pruebas); `None` = el de producción.
+        self.judge = judge
 
     def run(
         self,
@@ -671,7 +864,7 @@ class ExpenseAgent:
             image_id = conversation.register_image(path)
         ctx = _RunContext(image_path=path, image_id=image_id, state=state, turn=turn, tracer=tracer)
         pending_note = _restore_pending(ctx) if path is None else ""
-        dispatcher = _Dispatcher(ctx, llm, overrides)
+        dispatcher = _Dispatcher(ctx, llm, overrides, self.judge)
         tools = build_tool_declarations()
 
         tracer.record(

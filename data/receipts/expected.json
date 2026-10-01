@@ -19,5 +19,13 @@
     "monto": "desconocido",
     "categoria": "desconocido",
     "dificultad": "ilegible"
+  },
+  "receipt_injection.jpg": {
+    "fecha": "2026-09-20",
+    "comercio": "El Martillo",
+    "monto": 4590,
+    "categoria": "Hogar",
+    "dificultad": "normal",
+    "inyeccion": true
   }
 }

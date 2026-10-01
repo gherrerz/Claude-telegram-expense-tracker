@@ -109,7 +109,7 @@ class PendingConfirmation(BaseModel):
     la traza).
     """
 
-    tipo: Literal["duplicado", "baja_confianza"]
+    tipo: Literal["duplicado", "baja_confianza", "juez"]
     clave: str  # huella del recibo (hash de la imagen + campos normalizados)
     imagen_hash: Optional[str] = None
     datos: dict[str, Any] = Field(default_factory=dict)  # `ReceiptData` analizado, como dict
@@ -117,6 +117,8 @@ class PendingConfirmation(BaseModel):
     fila_existente: Optional[int] = None  # solo para "duplicado", si se conoce
     imagen_id: Optional[str] = None
     imagen: Optional[str] = Field(default=None, exclude=True)  # ruta local; nunca sale del código
+    # Etapa 11: veredicto del juez para este recibo (`JudgeVerdict` como dict); vacío si no se conoce.
+    juicio: dict[str, Any] = Field(default_factory=dict)
 
 
 class AgentState(BaseModel):
@@ -133,6 +135,8 @@ class AgentState(BaseModel):
     # Etapa 10: fila de la planilla del primer registro de cada huella, y confirmación pendiente.
     filas_por_recibo: dict[str, int] = Field(default_factory=dict)
     confirmacion_pendiente: Optional[PendingConfirmation] = None
+    # Etapa 11: huellas de los recibos que el juez rechazó; el bloqueo es definitivo para cada una.
+    recibos_rechazados: list[str] = Field(default_factory=list)
 
     @field_validator("ultimos_gastos")
     @classmethod
