@@ -16,7 +16,7 @@
 - [x] T4 `app/tools/drive.py`: `guardar_recibo` con nombre normalizado, link desde la API y error estructurado sin credenciales.
 - [x] T5 Pruebas offline, prueba `live` y `scripts/verify_stage_4.py` (sube y confirma el `file_id` con `files.get`).
 - [x] T6 `docs/setup_google.md`, Sección 8 del notebook, bitácora y A11 en `docs/dev_prompts.md`.
-- [ ] T7 El autor configura OAuth y `.env`; verificación real.
+- [x] T7 El autor configuró OAuth y `.env`. Verificación real: `verify_stage_4.py` OK (upload y `files.get` confirma el archivo en la carpeta de prueba); `pytest -m live tests/test_stage4_live.py` 1 passed.
 
 ## Evidencia
 - Dependencias fijadas: google-api-python-client==2.201.0, google-auth==2.59.1, google-auth-oauthlib==1.5.0, google-auth-httplib2==0.4.3 (`pip install -r requirements.txt` OK en Python 3.12.3).

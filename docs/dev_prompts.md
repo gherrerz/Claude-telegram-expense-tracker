@@ -73,4 +73,7 @@ La rúbrica pide adjuntar los prompts o instrucciones usados para desarrollar el
 - **Prompt aplicado:** `docs/prompt_maestro_v2.md`, sección "ETAPA 4", con la adenda A11 (OAuth de usuario en lugar de cuenta de servicio).
 - **Decisión (A11):** OAuth de escritorio con el scope mínimo `drive.file`; carpeta y planilla de prueba creadas por API. Fuentes en la tabla de adenda.
 - **Resultado:** `app/google_auth.py`, `app/tools/drive.py` (`guardar_recibo`, `verify_file_exists`), `scripts/google_auth.py`, `scripts/setup_google_resources.py`, `scripts/verify_stage_4.py`, pruebas `tests/test_stage4_drive.py` (offline, servicio falso) y `tests/test_stage4_live.py`, `docs/setup_google.md` y Sección 8 del notebook. Ver `odd/tasks/etapa-4-drive.md`.
-- **Estado:** IMPLEMENTADA — VERIFICACIÓN REAL PENDIENTE (el autor debe consentir en el navegador y completar `.env`).
+- **Verificación real (2026-09-30, instrucción "listo, ya configuré todo, corré la verificación de la Etapa 4"):**
+  - `scripts/verify_stage_4.py`: `RESULTADO: OK`. Subió `receipt_normal.jpg`; `files.get` confirma que el archivo existe, es `image/jpeg` y está en la carpeta de prueba.
+  - `pytest -m live tests/test_stage4_live.py`: `1 passed`.
+- **Estado:** COMPLETADA.
