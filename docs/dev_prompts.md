@@ -227,3 +227,23 @@ La rúbrica pide adjuntar los prompts o instrucciones usados para desarrollar el
   - **c) El usuario insiste** con "Sí, regístralo igual": el rechazo es definitivo. Hubo 0 ejecuciones y la planilla no cambió.
   - `pytest -m live tests/test_stage11_live.py`: `1 passed`.
 - **Estado:** COMPLETADA.
+
+### Etapa 12 — Golden set y evaluación
+- **Fecha:** 2026-10-01
+- **Modelo de desarrollo:** Claude Code, `claude-opus-5-5` (orquestador) y un subagente `sonnet` (escritor).
+- **Instrucción del autor:** "continua".
+- **Prompt aplicado:** `docs/prompt_maestro_v2.md`, sección "ETAPA 12".
+- **Decisiones de diseño:**
+  - Criterios por condición, no por texto exacto: 23 tipos (`ruta`, `tool_ejecutada`, `extraccion_coincide`, `veredicto_juez`, `filas_planilla_delta`, `memoria_total`, `confirmacion_pendiente`, etc.) definidos en `eval/criteria.py`. El golden set se valida antes de gastar una llamada (tipos y parámetros), un criterio sin evidencia falla (nunca pasa en vacío) y no hay forma de omitir un criterio.
+  - `eval/golden_set_v1.json` tiene 13 casos: los 10 mínimos, con el caso 8 abierto en una entrada por ruta del router (GS08A a GS08D). Cada caso corre con una `Conversation` y un `AgentState` nuevos, a través de `ExpenseAssistant` con el juez de producción.
+  - Reproducibilidad con Google real: los casos con Google (GS01, GS06, GS09, GS10) usan las tools reales y miden las filas de la planilla antes y después de cada turno (solo lectura); los demás corren las mismas tools reales con la configuración de Google en blanco (degradación controlada, A12) y reciben su error estructurado, sin simulaciones. Los recibos únicos se generan desde una receta del golden set con un sufijo de corrida (`<comercio> <HHMMSS>-<n>`) para no chocar con la deduplicación de la planilla.
+  - Dos etiquetas de versión: la del golden set (`v1`, cambia solo si se agregan casos) y la del sistema (`--system-version`, `results_vN.json`). El sistema se corrige, nunca el caso.
+  - Cuota: un 429 o 503 que agota los reintentos deja el caso `PENDIENTE` (no `FALLIDO`), detiene la corrida y la marca `interrumpida` (código de salida 3). La señal sale del `LLM_DECISION` con `status="error"`, porque el asistente captura el error. `--resume` ejecuta solo los `PENDIENTE`, `OMITIDO` o nunca corridos; un `FALLIDO` o `ERROR` registrado se conserva y el arnés rechaza reanudar si el golden set cambió (hash). Una corrida interrumpida o con casos pendientes no cuenta como aprobada.
+  - Un archivo de resultados existente no se sobrescribe sin `--resume`; el archivo se escribe de forma atómica después de cada caso y los `eval/results_*.json` se versionan como evidencia (solo `eval/results_*.tmp.json` está en `.gitignore`).
+  - **[SUPUESTO]** Las heurísticas de texto (aclaración, confirmación, afirmación de acciones prohibidas, montos) cubren las fórmulas habituales y no todas las paráfrasis; las condiciones fuertes son estructurales (ruta, tools ejecutadas, veredicto, estado, planilla). Si un criterio se cumple por la heurística pero no por la intención, se corrige el sistema o se informa, no se relaja el criterio.
+  - **[SUPUESTO]** El recibo generado se categoriza como Supermercado (como en las verificaciones de las Etapas 10 y 11); si el modelo eligiera otra categoría, GS09 fallaría y se corregiría el sistema, no el caso.
+- **Resultado:** `eval/golden_set_v1.json`, `eval/run_eval.py`, `eval/criteria.py`, `tests/test_stage12_eval.py`, Sección 10 del notebook (con `RUN_EVAL = False` por defecto), `docs/evaluation.md`, fila del golden set en `docs/bonos.md` y fila 12 del README. Ver `odd/tasks/etapa-12-eval.md`.
+- **Verificación:** pruebas offline (`448 passed, 20 deselected`; 90 son del arnés), notebook sin credenciales ejecutado con `nbconvert` y salida con código 2 del script sin configuración. La corrida real del golden set (T5) está pendiente: sin ella no hay evidencia del bono.
+- **Corrección del orquestador:** la primera versión del arnés simulaba con éxito `guardar_recibo` y `registrar_gasto` en los casos sin Google, lo que contradice A12. Se reemplazó por las tools reales en modo degradado (`reales_sin_google`), sin cambiar ningún criterio.
+- **Corrida real v1 (2026-10-01):** `eval/run_eval.py --system-version v1` dio `RESULTADO: APROBADA`. Pasaron 13/13 casos (100%), con 65 llamadas LLM, 119.912 tokens y sin interrupciones. Archivo: `eval/results_v1.json`; historial en `docs/evaluation.md`. Queda resuelto el supuesto de GS09: el recibo generado se categorizó como Supermercado.
+- **Estado:** COMPLETADA.

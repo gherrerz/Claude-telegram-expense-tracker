@@ -36,7 +36,7 @@ Proyecto académico: tarea final del curso de agentes de IA. La entrega evaluada
 | 9 | Router | Completada |
 | 10 | Memoria avanzada | Completada |
 | 11 | Juez LLM | Completada |
-| 12 | Golden set | Pendiente |
+| 12 | Golden set | Completada (v1: 13/13) |
 | 13 | Demo Telegram | Pendiente |
 | 14 | Notebook final y entrega | Pendiente |
 
