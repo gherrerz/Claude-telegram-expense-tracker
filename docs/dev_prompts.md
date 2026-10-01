@@ -262,4 +262,5 @@ La rúbrica pide adjuntar los prompts o instrucciones usados para desarrollar el
   - Librería: `python-telegram-bot==22.8` (símbolos verificados en el código instalado; el sitio de documentación no se consultó).
 - **Resultado:** `app/telegram_bot.py`, `TELEGRAM_ALLOWED_CHAT_IDS` en `app/config.py`, `tests/test_stage13_telegram.py`, `docs/setup_telegram.md` y fila 13 del README. Ver `odd/tasks/etapa-13-telegram.md`.
 - **Verificación:** pruebas offline sin red. La prueba manual con el token real y la transcripción de la traza están pendientes.
+- **Decisión del autor (2026-10-01, instrucción "saltemos la prueba manual de telegram, despues la realizo, ahora continua con la siguiente etapa"):** la prueba manual queda para más adelante. La demo no es evidencia evaluada.
 - **Estado:** IMPLEMENTADA — PRUEBA MANUAL PENDIENTE.
