@@ -119,4 +119,10 @@ La rúbrica pide adjuntar los prompts o instrucciones usados para desarrollar el
 - **Versión de prompt:** `AGENT_PROMPT_v2` agrega una regla para usar el historial y dirigirse al usuario por su nombre si lo dio en la conversación, sin nombrar a nadie en el prompt. `AGENT_PROMPT_v1` se conserva en el registro por trazabilidad y la prueba de la Etapa 6 apunta a la v2.
 - **Resultado:** `app/conversation.py`, cambios en `app/agent.py`, `app/llm.py` y `app/prompts.py`, pruebas offline `tests/test_stage7_history.py` (incluye la verificación de que el nombre no está en `app/`), `tests/test_stage7_live.py`, `scripts/verify_stage_7.py` (sin Google por defecto; `--with-google` opcional) y Sección 4 del notebook. Ver `odd/tasks/etapa-7-history.md`.
 - **Verificación:** pruebas offline y notebook ejecutados sin credenciales. La ejecución real (turno 2 con el nombre y prueba negativa) está pendiente.
-- **Estado:** IMPLEMENTADA — VERIFICACIÓN REAL PENDIENTE.
+- **Verificación real (2026-10-01, sin Google):**
+  - `scripts/verify_stage_7.py`: `RESULTADO: OK`, con 8 de 8 comprobaciones y 9 llamadas sin reintentos.
+    - Turno 1, "Me llamo Diego": 0 tools.
+    - Turno 2, imagen y "Registra este recibo": recibió 2 mensajes previos, pidió `analizar_recibo` y la respuesta empieza con "Diego, …".
+    - Prueba negativa sin historial: 0 mensajes previos y la respuesta no contiene "Diego".
+  - `pytest -m live tests/test_stage7_live.py`: `2 passed`.
+- **Estado:** COMPLETADA.

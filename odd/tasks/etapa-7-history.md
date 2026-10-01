@@ -12,7 +12,7 @@
 - [x] T3 Pruebas offline: el turno 2 recibe el turno 1; prueba negativa sin historial; el nombre no está en el código.
 - [x] T4 Prueba `live` y `scripts/verify_stage_7.py` (sin Google, para no gastar cuota de Drive): turno 1 "Me llamo Diego", turno 2 imagen y "Registra este recibo"; prueba negativa.
 - [x] T5 Sección 4 del notebook y bitácora.
-- [ ] T6 Verificación real.
+- [x] T6 Verificación real: `verify_stage_7.py` OK (el turno 2 usa "Diego" y la prueba negativa no); `pytest -m live` 2 passed.
 
 ## Evidencia
 - T1: `app/conversation.py` (`Conversation`: `contents`, `turn`, registro `img_N`, `summary()` con enmascarado).
