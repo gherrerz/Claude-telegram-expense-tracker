@@ -24,7 +24,7 @@
 - [x] T3 Pruebas offline del ciclo completo.
 - [x] T4 `scripts/verify_stage_10.py` y prueba `live`, con un recibo sintético único generado en tiempo de ejecución.
 - [x] T5 Sección 7 del notebook, `docs/bonos.md` y bitácora.
-- [ ] T6 Verificación real.
+- [x] T6 Verificación real: `verify_stage_10.py` OK (los 5 pasos, filas 5 y 6, duplicado confirmado en un turno posterior); `pytest -m live` 1 passed.
 
 ## Evidencia
 Escritor `sonnet`, ruta delegated direct. Sin commits (los hace el orquestador).
