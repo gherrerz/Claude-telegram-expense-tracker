@@ -5,11 +5,11 @@ from app.config import config_status
 
 
 def pytest_collection_modifyitems(config, items):
-    # Las pruebas de Google Drive (Etapa 4) se omiten por su propia condición.
+    # Las pruebas de Google (Etapas 4 y 5) se omiten por su propia condición.
     live_items = [
         item
         for item in items
-        if "live" in item.keywords and "stage4" not in item.nodeid
+        if "live" in item.keywords and "stage4" not in item.nodeid and "stage5" not in item.nodeid
     ]
     if not live_items:
         return

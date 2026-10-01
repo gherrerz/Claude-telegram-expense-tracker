@@ -29,7 +29,7 @@ Proyecto académico: tarea final del curso de agentes de IA. La entrega evaluada
 | 2 | Proyecto Python base y trazador | Implementada (pendiente de cierre) |
 | 3 | LLM con visión y `analizar_recibo` | Implementada — verificación real pendiente |
 | 4 | `guardar_recibo` (Drive) | Implementada — verificación real pendiente |
-| 5 | `registrar_gasto` (Sheets) | Pendiente |
+| 5 | `registrar_gasto` (Sheets) | Implementada — verificación real pendiente |
 | 6 | Loop ReAct | Pendiente |
 | 7 | Historial simple | Pendiente |
 | 8 | Seguridad basal | Pendiente |

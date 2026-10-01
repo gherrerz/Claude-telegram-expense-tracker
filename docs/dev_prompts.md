@@ -77,3 +77,18 @@ La rúbrica pide adjuntar los prompts o instrucciones usados para desarrollar el
   - `scripts/verify_stage_4.py`: `RESULTADO: OK`. Subió `receipt_normal.jpg`; `files.get` confirma que el archivo existe, es `image/jpeg` y está en la carpeta de prueba.
   - `pytest -m live tests/test_stage4_live.py`: `1 passed`.
 - **Estado:** COMPLETADA.
+
+### Etapa 5 — Tool registrar_gasto (Google Sheets)
+- **Fecha:** 2026-09-30
+- **Modelo de desarrollo:** Claude Code, `claude-opus-5-5` (orquestador) y un subagente `sonnet` (escritor).
+- **Instrucción del autor:** "listo, continua".
+- **Prompt aplicado:** `docs/prompt_maestro_v2.md`, sección "ETAPA 5", con la adenda A11 (OAuth de usuario).
+- **Decisiones de diseño:** validación en código antes de escribir; solo `values.append` con `INSERT_ROWS`; deduplicación por fecha + comercio normalizado + monto como mecanismo de "repetible con seguridad" del bono; `row_number` tomado de `updates.updatedRange`; `valueInputOption=RAW` para evitar fórmulas inyectadas y conservar el monto numérico. Fuente: https://developers.google.com/workspace/sheets/api/reference/rest/v4/spreadsheets.values/append (símbolos contrastados con `sheets.v4.json` de `googleapiclient`).
+- **Resultado:** `app/tools/sheets.py` (`registrar_gasto`, `get_sheet_snapshot`), `SheetResult` con `duplicate` y `error`, pruebas offline `tests/test_stage5_sheets.py` (servicio falso en `tests/fakes.py`), `tests/test_stage5_live.py`, `scripts/verify_stage_5.py`, Sección 8 del notebook y `docs/bonos.md`. Ver `odd/tasks/etapa-5-sheets.md`.
+- **Verificación:** pruebas offline y notebook ejecutados sin credenciales (la parte real se omite). La verificación real espera el token vigente del autor.
+- **Verificación real (2026-10-01, instrucción "listo continua"):**
+  - El cliente OAuth vigente no veía la carpeta ni la planilla anteriores (404 con `drive.file`, que solo da acceso a lo que creó la misma app). Se crearon recursos nuevos con `scripts/setup_google_resources.py`.
+  - `scripts/verify_stage_5.py`: `RESULTADO: OK`. Antes, 0 filas; `registrar_gasto` devolvió `row_number=2`; después, 1 fila que coincide; la repetición quedó marcada `duplicate=True` y el conteo no cambió.
+  - `pytest -m live tests/test_stage5_live.py`: `1 passed`.
+  - Queda resuelto el supuesto: `drive.file` alcanza para leer y agregar filas en la planilla creada por la app.
+- **Estado:** COMPLETADA.
