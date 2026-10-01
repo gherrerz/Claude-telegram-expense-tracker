@@ -12,7 +12,7 @@
 - [x] T3 Pruebas offline: cada ruta ejecuta su camino, solo `REGISTRAR_RECIBO` habilita tools y una etiqueta inválida cae al respaldo.
 - [x] T4 Prueba `live` y `scripts/verify_stage_9.py`: 4 entradas, una por ruta, más "Hola".
 - [x] T5 Sección 6 del notebook, `docs/bonos.md` y bitácora.
-- [ ] T6 Verificación real.
+- [x] T6 Verificación real: `verify_stage_9.py` OK (4 de 4 rutas correctas, con efecto observable); `pytest -m live` 4 passed.
 
 ## Evidencia
 - T1: `ROUTER_PROMPT_v1`, `CHAT_PROMPT_v1`, `QUERY_PROMPT_v1` en `app/prompts.py`; `app/router.py` (enum, temperatura 0.0, respaldos, evento `ROUTE`). Observado: `tests/test_stage9_router.py` verde (parseo de cada etiqueta, JSON inválido, etiqueta desconocida, falla del LLM, entrada vacía sin llamada).

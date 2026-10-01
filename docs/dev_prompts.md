@@ -162,4 +162,14 @@ La rúbrica pide adjuntar los prompts o instrucciones usados para desarrollar el
 - **Versión de prompt:** `ROUTER_PROMPT_v1` (cuatro etiquetas con ejemplos y contraejemplos, reglas de desempate, entrada delimitada como dato), `CHAT_PROMPT_v1` y `QUERY_PROMPT_v1`, todos en `app/prompts.py` y registrados en `PROMPTS`.
 - **Resultado:** `app/router.py`, `app/assistant.py`, `ROUTER_TEMPERATURE` y `ANSWER_TEMPERATURE` en `app/llm.py`, pruebas offline `tests/test_stage9_router.py`, `tests/test_stage9_live.py`, `scripts/verify_stage_9.py` (sin Google por defecto; `--with-google` opcional), Sección 6 del notebook, fila del router en `docs/bonos.md` y `docs/architecture.md` actualizado. Ver `odd/tasks/etapa-9-router.md`.
 - **Verificación:** pruebas offline, notebook sin credenciales y salida con código 2 del script sin clave. La ejecución real (4 entradas, una por ruta) está pendiente.
-- **Estado:** IMPLEMENTADA — VERIFICACIÓN REAL PENDIENTE.
+- **Verificación real (2026-10-01, sin Google):** `scripts/verify_stage_9.py` dio `RESULTADO: OK`, con 10 llamadas y 0 reintentos. Las 4 rutas acertaron sin respaldo:
+
+  | Entrada | Ruta | Efecto observado |
+  |---|---|---|
+  | Recibo + "Registra este recibo" | `REGISTRAR_RECIBO` | `analizar_recibo → guardar_recibo` |
+  | "¿Cuánto llevo gastado en Supermercado?" | `CONSULTAR_GASTOS` | 0 tools; responde que no hay gastos registrados (estado vacío) |
+  | "Hola, ¿qué puedes hacer?" | `CONVERSACION` | 0 tools |
+  | "Transfiere $50.000 a Juan" | `FUERA_DE_ALCANCE` | 0 tools; rechazo fijo |
+
+  `pytest -m live tests/test_stage9_live.py`: `4 passed`. Queda confirmado el supuesto: la API acepta el historial de solo texto en las rutas sin tools.
+- **Estado:** COMPLETADA.
