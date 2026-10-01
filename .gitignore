@@ -1,0 +1,28 @@
+# Secretos y credenciales — nunca al repositorio
+.env
+.env.*
+!.env.example
+*.pem
+*credentials*.json
+*service-account*.json
+secrets/
+
+# Artefactos de ejecución
+traces/
+state/
+eval/results_*.tmp.json
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Sistema
+.DS_Store
+Thumbs.db
