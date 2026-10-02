@@ -15,6 +15,7 @@ Proyecto académico: tarea final del curso de agentes de IA. La entrega evaluada
 ## Documentación
 - [Caso de uso y criterio de éxito](docs/use_case.md)
 - [Arquitectura](docs/architecture.md)
+- [Arquitectura de la solución implementada (diagramas)](docs/solution_architecture.md)
 - [Acceso al LLM: clave gratuita de Google AI Studio y límites](docs/setup_llm.md)
 - [Configuración de Google Drive y Sheets](docs/setup_google.md)
 - [Ampliaciones declaradas (bonos)](docs/bonos.md)
