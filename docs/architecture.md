@@ -1,3 +1,5 @@
+> Diseño inicial de la Etapa 1; la arquitectura implementada está en [solution_architecture.md](solution_architecture.md).
+
 # Arquitectura — Telegram Expense Tracker
 
 ## 1. Contexto y objetivos
