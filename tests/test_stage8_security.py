@@ -16,6 +16,7 @@ from app.prompts import (
     SECURITY_SCOPE_ID,
     SECURITY_SCOPE_v1,
     SECURITY_SCOPE_v2,
+    SECURITY_SCOPE_v3,
     compose_system_instruction,
 )
 from app.security import (
@@ -111,12 +112,25 @@ def test_scope_v2_covers_scope_allowed_forbidden_and_safe_refusal():
         assert data_rule in text
     for refusal in ("no llames a ninguna herramienta", "brevedad", "ofrece lo que sí puedes hacer"):
         assert refusal in text
-    assert SECURITY_SCOPE_ID == "SECURITY_SCOPE_v2" and ACTIVE_SECURITY_SCOPE == SECURITY_SCOPE_v2
+
+
+def test_scope_v3_is_the_active_scope_and_keeps_v2_rules_plus_the_policy_scope():
+    text = SECURITY_SCOPE_v3
+    assert SECURITY_SCOPE_ID == "SECURITY_SCOPE_v3" and ACTIVE_SECURITY_SCOPE == SECURITY_SCOPE_v3
+    for needle in ("registrar gastos", "analizar_recibo", "guardar_recibo", "registrar_gasto",
+                   "transferir", "pagar", "borrar", "modificar", "claves", "credenciales",
+                   "DATO, no instrucción", "resultados de herramientas", "imágenes",
+                   "no llames a ninguna herramienta", "ofrece lo que sí puedes hacer"):
+        assert needle in text  # lo que ya exigía la v2 se conserva
+    # Novedad de la Etapa 15: responder sobre la política con la base de conocimiento, como DATO.
+    assert "política de rendición" in text and "base de conocimiento" in text
+    assert "fragmentos recuperados" in text and "Nunca inventes montos" in text
 
 
 def test_scope_v1_is_kept_in_registry_for_traceability():
     assert PROMPTS["SECURITY_SCOPE_v1"] == SECURITY_SCOPE_v1 != SECURITY_SCOPE_v2
-    assert PROMPTS["SECURITY_SCOPE_v2"] == SECURITY_SCOPE_v2
+    assert PROMPTS["SECURITY_SCOPE_v2"] == SECURITY_SCOPE_v2 != SECURITY_SCOPE_v3
+    assert PROMPTS["SECURITY_SCOPE_v3"] == SECURITY_SCOPE_v3
 
 
 def test_compose_always_prepends_active_scope_for_every_role():
@@ -128,7 +142,7 @@ def test_compose_always_prepends_active_scope_for_every_role():
 
 
 def test_a_scope_block_cannot_be_used_as_a_role():
-    for scope_id in ("SECURITY_SCOPE_v1", "SECURITY_SCOPE_v2"):
+    for scope_id in ("SECURITY_SCOPE_v1", "SECURITY_SCOPE_v2", "SECURITY_SCOPE_v3"):
         with pytest.raises(KeyError):
             compose_system_instruction(scope_id)
 
@@ -157,7 +171,7 @@ def test_scope_is_in_every_public_llm_call_path_and_trace():
         sent = client.models.calls[0]["config"].system_instruction
         assert sent.startswith(ACTIVE_SECURITY_SCOPE), name
         decision = [e.data for e in tracer.events if e.event_type == EventType.LLM_DECISION][0]
-        assert decision["security_scope_id"] == "SECURITY_SCOPE_v2", name
+        assert decision["security_scope_id"] == "SECURITY_SCOPE_v3", name
 
 
 def test_scope_id_is_traced_even_when_the_call_fails():
@@ -165,14 +179,14 @@ def test_scope_id_is_traced_even_when_the_call_fails():
     with pytest.raises(Exception):
         llm.generate_text("hola")
     decision = [e.data for e in tracer.events if e.event_type == EventType.LLM_DECISION][0]
-    assert decision["status"] == "error" and decision["security_scope_id"] == "SECURITY_SCOPE_v2"
+    assert decision["status"] == "error" and decision["security_scope_id"] == "SECURITY_SCOPE_v3"
 
 
 def test_agent_stop_event_carries_scope_id():
     agent, client, tracer, _ = make_agent([fc_response(text="Hola.")])
     agent.run("Hola")
     stops = [e.data for e in tracer.events if e.event_type == EventType.STOP]
-    assert stops and all(s["security_scope_id"] == "SECURITY_SCOPE_v2" for s in stops)
+    assert stops and all(s["security_scope_id"] == "SECURITY_SCOPE_v3" for s in stops)
 
 
 # -- T2: errores saneados -----------------------------------------------------------
@@ -326,7 +340,7 @@ def test_user_message_cannot_replace_system_instruction_across_turns():
         assert call["config"].system_instruction.startswith(ACTIVE_SECURITY_SCOPE)
         assert AGENT_PROMPT_v3 in call["config"].system_instruction
         assert {c.role for c in call["contents"]} <= {"user", "model"}
-    assert SECURITY_SCOPE_v2 not in " ".join(
+    assert SECURITY_SCOPE_v3 not in " ".join(
         p.text for c in conversation.contents for p in c.parts if p.text
     )
 
@@ -337,7 +351,7 @@ def test_leaked_canaries_detects_prompt_fragments_case_insensitively():
     assert leaked_canaries("el texto es dato, no instrucción") == ["DATO, no instrucción"]
     assert leaked_canaries("No puedo compartir eso. Puedo registrar gastos.") == []
     for canary in CANARIES:  # cada canario existe de verdad en los prompts reales
-        assert canary in SECURITY_SCOPE_v2 or canary in AGENT_PROMPT_v2
+        assert canary in SECURITY_SCOPE_v2 or canary in SECURITY_SCOPE_v3 or canary in AGENT_PROMPT_v2
 
 
 @pytest.mark.parametrize("text", [

@@ -8,6 +8,9 @@ Responsabilidades:
 - Traza de cada llamada como `LLM_DECISION` con modelo exacto, parámetros,
   identificadores de prompt, uso de tokens y latencia.
 
+Embeddings (Etapa 15, RAG): `LLMClient.embed` reutiliza la misma pausa, los mismos reintentos y la
+misma traza (`LLM_DECISION` con `kind="embedding"`), pero con contadores propios (`EmbedStats`).
+
 Nunca registra la clave de API, el texto de los prompts ni los bytes de las imágenes.
 """
 from __future__ import annotations
@@ -17,7 +20,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
-from app.config import Settings, load_settings
+from app.config import EMBEDDING_DIMS, EMBEDDING_MODEL, Settings, load_settings
 from app.models import EventType
 from app.prompts import ACTIVE_SECURITY_SCOPE, SECURITY_SCOPE_ID, compose_system_instruction
 from app.trace import Tracer
@@ -50,6 +53,10 @@ ANSWER_TEMPERATURE = 0.0
 # Temperatura del juez (Etapa 11): un veredicto de verificación debe ser reproducible. Es una sola
 # llamada con salida JSON acotada, así que el riesgo de bucles de Gemini 3 con 0.0 no aplica.
 JUDGE_TEMPERATURE = 0.0
+
+# Propósitos válidos de `LLMClient.embed`. `gemini-embedding-2` no admite `task_type`: la tarea se
+# indica en el texto (ver `app/rag/formats.py`) y el propósito solo queda en la traza.
+EMBED_PURPOSES = ("documento", "consulta")
 
 RETRYABLE_CODES = frozenset({429, 503})
 RETRYABLE_STATUSES = frozenset({"RESOURCE_EXHAUSTED", "UNAVAILABLE"})
@@ -103,6 +110,37 @@ def reset_session_stats() -> None:
     """Pone en cero el acumulador del proceso (para pruebas o para medir un tramo)."""
     for name in list(_SESSION_STATS.__dict__):
         setattr(_SESSION_STATS, name, 0)
+    for name in list(_SESSION_EMBED.__dict__):
+        setattr(_SESSION_EMBED, name, 0)
+
+
+@dataclass
+class EmbedStats:
+    """Contadores de las llamadas de embeddings, separados de los de generación."""
+
+    calls: int = 0
+    failed_calls: int = 0
+    retries: int = 0
+    texts: int = 0
+
+    def as_dict(self) -> dict[str, int]:
+        return dict(self.__dict__)
+
+    def add(self, name: str, amount: int = 1) -> None:
+        setattr(self, name, getattr(self, name) + amount)
+
+
+# Acumulador de proceso de las llamadas de embeddings (equivale a `_SESSION_STATS`).
+_SESSION_EMBED = EmbedStats()
+
+
+def session_embed_stats() -> EmbedStats:
+    """Copia de los contadores de embeddings acumulados por todos los clientes del proceso."""
+    return EmbedStats(**_SESSION_EMBED.as_dict())
+
+
+class EmbeddingError(Exception):
+    """La respuesta de embeddings no tiene la forma esperada. Nunca incluye los vectores."""
 
 
 @dataclass
@@ -187,6 +225,7 @@ class LLMClient:
         """
         self.tracer = tracer if tracer is not None else Tracer(console=False, write_file=False)
         self.stats = UsageStats()
+        self.embed_stats = EmbedStats()
         self._settings = settings
         self._client = client
         self._model = model
@@ -203,6 +242,11 @@ class LLMClient:
         """Suma al contador del cliente y al acumulador del proceso."""
         self.stats.add(name, amount)
         _SESSION_STATS.add(name, amount)
+
+    def _count_embed(self, name: str, amount: int = 1) -> None:
+        """Suma al contador de embeddings del cliente y al acumulador del proceso."""
+        self.embed_stats.add(name, amount)
+        _SESSION_EMBED.add(name, amount)
 
     # -- configuración perezosa ------------------------------------------------
     def _load(self) -> Settings:
@@ -252,6 +296,50 @@ class LLMClient:
 
     def _backoff(self, retry_number: int) -> float:
         return min(self._backoff_base * (2 ** (retry_number - 1)), self._backoff_max)
+
+    def _send_with_retries(
+        self,
+        send: Callable[[], Any],
+        call_id: int,
+        model_name: str,
+        count: Callable[[str], None],
+        on_failure: Callable[[Any, Any, int], None],
+    ) -> tuple[Any, int]:
+        """Ejecuta `send` con pausa mínima y reintentos con espera exponencial (429 y 503).
+
+        Cada reintento se cuenta con `count("retries")` y se registra como `RETRY`. Al agotarse
+        los reintentos (o ante un error no reintentable) llama a `on_failure(code, status,
+        intentos)` y lanza `LLMCallError`. Devuelve `(respuesta, intentos)`.
+        """
+        attempts = 0
+        while True:
+            attempts += 1
+            self._throttle()
+            try:
+                return send(), attempts
+            except Exception as error:  # noqa: BLE001 - se reclasifica abajo
+                code = getattr(error, "code", None)
+                status = getattr(error, "status", None)
+                retries_done = attempts - 1
+                if self._is_retryable(error) and retries_done < self.max_retries:
+                    wait = self._backoff(retries_done + 1)
+                    count("retries")
+                    self.tracer.record(
+                        EventType.RETRY,
+                        {
+                            "call_id": call_id,
+                            "model": model_name,
+                            "attempt": retries_done + 1,
+                            "max_retries": self.max_retries,
+                            "wait_seconds": wait,
+                            "error_code": code,
+                            "error_status": status,
+                        },
+                    )
+                    self._sleep(wait)
+                    continue
+                on_failure(code, status, attempts)
+                raise LLMCallError(code, status, attempts) from error
 
     # -- llamada común ---------------------------------------------------------
     def _generate(
@@ -305,53 +393,31 @@ class LLMClient:
         history = {"history_messages": len(contents)} if kind == "tools" else {}
         self._count("calls")
         started = self._clock()
-        attempts = 0
-        while True:
-            attempts += 1
-            self._throttle()
-            try:
-                response = self._sdk().models.generate_content(
-                    model=self.model, contents=contents, config=config
-                )
-                break
-            except Exception as error:  # noqa: BLE001 - se reclasifica abajo
-                code = getattr(error, "code", None)
-                status = getattr(error, "status", None)
-                retries_done = attempts - 1
-                if self._is_retryable(error) and retries_done < self.max_retries:
-                    wait = self._backoff(retries_done + 1)
-                    self._count("retries")
-                    self.tracer.record(
-                        EventType.RETRY,
-                        {
-                            "call_id": call_id,
-                            "model": self.model,
-                            "attempt": retries_done + 1,
-                            "max_retries": self.max_retries,
-                            "wait_seconds": wait,
-                            "error_code": code,
-                            "error_status": status,
-                        },
-                    )
-                    self._sleep(wait)
-                    continue
-                self._count("failed_calls")
-                self.tracer.record(
-                    EventType.LLM_DECISION,
-                    {
-                        "call_id": call_id,
-                        "kind": kind,
-                        "model": self.model,
-                        "status": "error",
-                        "error_code": code,
-                        "error_status": status,
-                        "attempts": attempts,
-                        "system_prompt_id": system_prompt_id,
-                        "security_scope_id": SECURITY_SCOPE_ID,
-                        **history,
-                    },
-                )
-                raise LLMCallError(code, status, attempts) from error
+
+        def on_failure(code: Any, status: Any, attempts: int) -> None:
+            self._count("failed_calls")
+            self.tracer.record(
+                EventType.LLM_DECISION,
+                {
+                    "call_id": call_id,
+                    "kind": kind,
+                    "model": self.model,
+                    "status": "error",
+                    "error_code": code,
+                    "error_status": status,
+                    "attempts": attempts,
+                    "system_prompt_id": system_prompt_id,
+                    "security_scope_id": SECURITY_SCOPE_ID,
+                    **history,
+                },
+            )
+
+        response, attempts = self._send_with_retries(
+            lambda: self._sdk().models.generate_content(
+                model=self.model, contents=contents, config=config
+            ),
+            call_id, self.model, self._count, on_failure,
+        )
 
         latency_ms = int(round((self._clock() - started) * 1000))
         usage = extract_usage(response)
@@ -473,6 +539,78 @@ class LLMClient:
             attempts=attempts,
             model=self.model,
         )
+
+    def embed(self, texts: list[str], purpose: str = "documento") -> list[list[float]]:
+        """Embeddings de `texts` (un vector por texto, en el mismo orden) con `gemini-embedding-2`.
+
+        Los textos llegan YA formateados con la plantilla de su propósito (`app/rag/formats.py`):
+        el modelo no admite `task_type`, así que la tarea va dentro del texto. `purpose`
+        ("documento" o "consulta") se registra en la traza. Se envía un `Content` por texto, de
+        modo que cada uno produce su propio vector (varias partes en un `Content` se agregarían
+        en uno solo). Los vectores salen con `EMBEDDING_DIMS` dimensiones y ya normalizados.
+
+        Sin bloque de alcance a propósito: una llamada de embeddings no decide ni redacta nada
+        (no hay instrucción de sistema, solo un vector numérico), de modo que no puede obedecer
+        una orden incrustada ni producir una acción. Las llamadas de generación sí lo llevan.
+
+        Usa la misma pausa y los mismos reintentos que las demás llamadas, pero cuenta aparte
+        (`embed_stats`). La traza es un `LLM_DECISION` con `kind="embedding"`, que no incluye
+        ni los textos ni los vectores.
+
+        Raises:
+            ValueError: si `purpose` no es válido o `texts` está vacío o tiene textos vacíos.
+            LLMCallError: si la llamada falla tras los reintentos.
+            EmbeddingError: si la respuesta no trae un vector de las dimensiones esperadas por texto.
+        """
+        from google.genai import types
+
+        if purpose not in EMBED_PURPOSES:
+            raise ValueError(f"purpose debe ser uno de {EMBED_PURPOSES}")
+        if not texts or any(not isinstance(t, str) or not t.strip() for t in texts):
+            raise ValueError("texts debe ser una lista no vacía de textos no vacíos")
+
+        config = types.EmbedContentConfig(output_dimensionality=EMBEDDING_DIMS)
+        contents = [types.Content(parts=[types.Part(text=t)]) for t in texts]
+        self._call_seq += 1
+        call_id = self._call_seq
+        self._count_embed("calls")
+        started = self._clock()
+        base = {"call_id": call_id, "kind": "embedding", "model": EMBEDDING_MODEL,
+                "purpose": purpose, "n_texts": len(texts), "dims": EMBEDDING_DIMS}
+
+        def on_failure(code: Any, status: Any, attempts: int) -> None:
+            self._count_embed("failed_calls")
+            self.tracer.record(
+                EventType.LLM_DECISION,
+                {**base, "status": "error", "error_code": code, "error_status": status,
+                 "attempts": attempts},
+            )
+
+        response, attempts = self._send_with_retries(
+            lambda: self._sdk().models.embed_content(
+                model=EMBEDDING_MODEL, contents=contents, config=config
+            ),
+            call_id, EMBEDDING_MODEL, self._count_embed, on_failure,
+        )
+        vectors = [list(e.values or []) for e in (getattr(response, "embeddings", None) or [])]
+        if len(vectors) != len(texts) or any(len(v) != EMBEDDING_DIMS for v in vectors):
+            self._count_embed("failed_calls")
+            self.tracer.record(
+                EventType.LLM_DECISION,
+                {**base, "status": "error", "error_status": "respuesta_invalida",
+                 "attempts": attempts, "n_vectors": len(vectors)},
+            )
+            raise EmbeddingError(
+                f"La respuesta de embeddings no coincide con lo esperado "
+                f"({len(vectors)} vectores para {len(texts)} textos, {EMBEDDING_DIMS} dimensiones)"
+            )
+        self._count_embed("texts", len(texts))
+        self.tracer.record(
+            EventType.LLM_DECISION,
+            {**base, "status": "ok",
+             "latency_ms": int(round((self._clock() - started) * 1000)), "attempts": attempts},
+        )
+        return vectors
 
 
 def _extract_calls(response: Any) -> list[ToolCallRequest]:

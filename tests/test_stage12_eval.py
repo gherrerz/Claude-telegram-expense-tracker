@@ -157,7 +157,8 @@ def test_golden_set_has_every_required_case(golden):
     assert len(ids) == len(set(ids))
     assert ids == ["GS01", "GS02", "GS03", "GS04", "GS05", "GS06", "GS07",
                    "GS08A", "GS08B", "GS08C", "GS08D", "GS09", "GS10"]
-    assert {c["categoria"] for c in golden["casos"]} == set(CATEGORIES)
+    # La categoría "rag" se agregó en la Etapa 15 y solo la usan los casos de golden_set_v2.json.
+    assert {c["categoria"] for c in golden["casos"]} == set(CATEGORIES) - {"rag"}
 
 
 def test_golden_set_router_cases_cover_the_four_routes(golden):
@@ -220,8 +221,14 @@ def test_golden_set_validation_rejects_bad_sets(golden):
 
 
 # -- Criterios ---------------------------------------------------------------------------------------
+# Tipos agregados en la Etapa 15; sus casos de aprobación y fallo están en tests/test_stage15_eval.py.
+STAGE15_CRITERIA = {"stop_en", "retrieval_count", "embeddings_count", "llamadas_llm_count",
+                    "retrieval_decision", "retrieval_best_min", "cita_fuente_recuperada"}
+
+
 def test_every_criterion_type_has_a_pass_and_a_fail_case():
-    assert set(CASES) == set(CRITERIA)
+    assert set(CASES) | STAGE15_CRITERIA == set(CRITERIA)
+    assert not set(CASES) & STAGE15_CRITERIA
 
 
 @pytest.mark.parametrize("kind", sorted(CASES))

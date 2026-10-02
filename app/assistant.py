@@ -7,6 +7,9 @@
 | REGISTRAR_RECIBO   | loop ReAct de `ExpenseAgent.run` (historial, rieles, juez*)   | sí    |
 | CONSULTAR_GASTOS   | una llamada `generate_text` con `QUERY_PROMPT_v2` y el        | no    |
 |                    | `AgentState` serializado como DATO                            |       |
+| CONSULTAR_POLITICA | RAG (Etapa 15): recupera fragmentos del Redis del curso; bajo | no    |
+|                    | el umbral abstiene SIN llamar al LLM; si no, una llamada con  |       |
+|                    | `RAG_PROMPT_v1` y los fragmentos como DATO (cita las fuentes) |       |
 | CONVERSACION       | una llamada estructurada con `CHAT_PROMPT_v2` ({respuesta,    | no    |
 |                    | nombre_usuario}); un nombre válido va al `AgentState`         |       |
 | FUERA_DE_ALCANCE   | texto fijo de rechazo en código, sin llamada al LLM           | no    |
@@ -22,7 +25,7 @@ formas" sin imagen continúa el registro; no hay ninguna regla de código sobre 
 
 Las tools solo existen en la ruta REGISTRAR_RECIBO: las demás rutas no declaran ninguna,
 y las pruebas verifican cero eventos `TOOL_CALL` en ellas. El router no es un filtro de
-seguridad: el bloque `SECURITY_SCOPE_v2` va en TODA llamada (lo garantiza `LLMClient`) y los
+seguridad: el bloque `SECURITY_SCOPE_v3` va en TODA llamada (lo garantiza `LLMClient`) y los
 rieles del agente no cambian.
 
 Decisión de diseño sobre FUERA_DE_ALCANCE: el rechazo es un texto fijo. Es determinista, no
@@ -40,6 +43,9 @@ importan para function calling, que ocurre únicamente en REGISTRAR_RECIBO.
 Trazas: `ROUTE` (clasificación) y luego, en las rutas sin tools, `USER_INPUT`, las
 `LLM_DECISION` del cliente, `FINAL_RESPONSE` y `STOP` con motivo `ruta_consulta`,
 `ruta_conversacion` o `ruta_fuera_de_alcance` (o `error_llm` / `respuesta_vacia`). En
+CONSULTAR_POLITICA se agregan el embedding de la consulta (`LLM_DECISION` con `kind="embedding"`)
+y `RETRIEVAL`, y la parada es `ruta_politica`, `rag_abstencion` (sin llamar al LLM de generación) o
+`rag_no_disponible` (sin configuración o con el Redis caído; nada se simula). En
 REGISTRAR_RECIBO, `USER_INPUT` y los demás eventos los registra el agente.
 """
 from __future__ import annotations
@@ -47,18 +53,22 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Mapping, Optional
 
 from pydantic import BaseModel, ValidationError
 
 from app.agent import STOP_EMPTY, STOP_LLM_ERROR, ExpenseAgent, JudgeFn, ToolFn
 from app.conversation import Conversation
-from app.llm import ANSWER_TEMPERATURE, LLMCallError, LLMClient, LLMResult
+from app.llm import ANSWER_TEMPERATURE, EmbeddingError, LLMCallError, LLMClient, LLMResult
 from app.memory import set_user_name, total_general, valid_user_name
 from app.models import AgentState, EventType
-from app.prompts import SECURITY_SCOPE_ID
+from app.prompts import RAG_INSUFFICIENT_PHRASE, SECURITY_SCOPE_ID
+from app.rag.knowledge import KnowledgeBase, load_knowledge_base
+from app.rag.retriever import retrieve
+from app.rag.store import RagStoreError
 from app.router import (
     CONSULTAR_GASTOS,
+    CONSULTAR_POLITICA,
     CONVERSACION,
     FUERA_DE_ALCANCE,
     REGISTRAR_RECIBO,
@@ -69,6 +79,7 @@ from app.trace import Tracer
 
 CHAT_PROMPT_ID = "CHAT_PROMPT_v2"
 QUERY_PROMPT_ID = "QUERY_PROMPT_v2"
+RAG_PROMPT_ID = "RAG_PROMPT_v1"
 CHAT_SCHEMA_NAME = "ChatOutput"
 
 # JSON Schema de la salida de CONVERSACION. `nombre_usuario` es una cadena y la cadena vacía
@@ -95,6 +106,9 @@ class ChatOutput(BaseModel):
 STOP_QUERY = "ruta_consulta"
 STOP_CHAT = "ruta_conversacion"
 STOP_OUT_OF_SCOPE = "ruta_fuera_de_alcance"
+STOP_POLICY = "ruta_politica"
+STOP_RAG_ABSTAIN = "rag_abstencion"
+STOP_RAG_UNAVAILABLE = "rag_no_disponible"
 
 RECENT_CONTEXT_MESSAGES = 4  # mensajes recientes que ve el router
 
@@ -112,6 +126,15 @@ LLM_ERROR_TEXT = (
     "No se realizó ninguna acción; intenta más tarde."
 )
 EMPTY_ANSWER_TEXT = "No obtuve una respuesta del modelo. Intenta reformular tu mensaje."
+# Abstención del RAG: texto fijo, sin llamar al LLM de generación (el mejor parecido no alcanzó el umbral).
+RAG_ABSTENTION_TEXT = (
+    f"{RAG_INSUFFICIENT_PHRASE} Prueba reformular la pregunta o consulta con la persona "
+    "encargada de las rendiciones."
+)
+RAG_UNAVAILABLE_TEXT = (
+    "La base de conocimiento de la política de rendición no está disponible en este momento, "
+    "así que no puedo responder esa pregunta. No se realizó ninguna acción."
+)
 IMAGE_NOTE = "[El usuario adjuntó una imagen, que no se procesa en esta ruta.]"
 
 
@@ -182,6 +205,32 @@ def build_query_message(question: str, state: AgentState) -> str:
     )
 
 
+def build_rag_message(question: str, fragments: list[dict[str, Any]]) -> str:
+    """Mensaje de la ruta de política: fragmentos y pregunta, ambos como DATO delimitado.
+
+    Cada fragmento lleva su encabezado `[fuente §sección]` (el formato de cita del prompt). El texto
+    de los documentos se neutraliza (`<` y `>`) para que un documento no pueda cerrar ni abrir las
+    etiquetas `<contexto>` y `<pregunta>`.
+    """
+    blocks = "\n".join(
+        f"[{_neutralize(f['fuente'])} §{_neutralize(f['seccion'])}]\n{_neutralize(f['texto'])}\n"
+        for f in fragments
+    )
+    return f"<contexto>\n{blocks}</contexto>\n<pregunta>{_neutralize(question)}</pregunta>"
+
+
+def append_sources_if_missing(answer: str, fragments: list[dict[str, Any]]) -> str:
+    """Agrega «Fuentes consultadas» si la respuesta no cita ningún archivo del contexto.
+
+    Es una red de seguridad determinista: el prompt pide citar `[archivo §sección]`, pero el modelo
+    puede omitirlo. No se agrega nada si la respuesta usa la frase fija de información insuficiente.
+    """
+    if RAG_INSUFFICIENT_PHRASE in answer or any(f["fuente"] in answer for f in fragments):
+        return answer
+    sources = ", ".join(dict.fromkeys(f"[{f['fuente']} §{f['seccion']}]" for f in fragments))
+    return f"{answer}\n\nFuentes consultadas: {sources}"
+
+
 def parse_chat_result(result: LLMResult) -> tuple[Optional[str], Optional[str]]:
     """`(respuesta, nombre_propuesto)` de la salida de CONVERSACION; `(None, None)` si no sirve.
 
@@ -208,12 +257,23 @@ class ExpenseAssistant:
         tool_overrides: Optional[dict[str, ToolFn]] = None,
         max_steps: Optional[int] = None,
         judge: Optional[JudgeFn] = None,
+        knowledge_base: Optional[KnowledgeBase] = None,
+        rag_env: Optional[Mapping[str, str]] = None,
     ) -> None:
+        """`knowledge_base` y `rag_env` son para la ruta CONSULTAR_POLITICA (Etapa 15).
+
+        Sin `knowledge_base`, se construye al primer uso desde la configuración (`rag_env` la
+        reemplaza en pruebas); si falta `REDIS_URL` o `REDIS_PREFIX` la ruta informa con honestidad
+        que la base no está disponible.
+        """
         self.llm = llm
         self.tracer = tracer
         self.tool_overrides = dict(tool_overrides or {})
         self.max_steps = max_steps
         self.judge = judge  # solo para pruebas; `None` = el juez de producción
+        self.knowledge_base = knowledge_base
+        self._rag_env = rag_env
+        self._knowledge_loaded = knowledge_base is not None
 
     def handle(
         self,
@@ -276,6 +336,10 @@ class ExpenseAssistant:
                 prompt_id=QUERY_PROMPT_ID, stop_ok=STOP_QUERY,
                 request_text=build_query_message(user_text, state),
             )
+        if decision.ruta == CONSULTAR_POLITICA:
+            return self._policy(
+                decision, llm, tracer, conversation, user_text, image_path is not None
+            )
         if decision.ruta == CONVERSACION and not decision.fallback:
             return self._chat(
                 decision, llm, tracer, conversation, state, user_text, image_path is not None
@@ -283,6 +347,13 @@ class ExpenseAssistant:
         return self._fixed(decision, tracer, conversation, user_text, image_path is not None)
 
     # -- rutas sin tools --------------------------------------------------------------
+    def _knowledge(self) -> Optional[KnowledgeBase]:
+        """Base de conocimiento inyectada o construida (una vez) desde la configuración."""
+        if not self._knowledge_loaded:
+            self.knowledge_base = load_knowledge_base(self._rag_env)
+            self._knowledge_loaded = True
+        return self.knowledge_base
+
     @staticmethod
     def _recent_context(conversation: Optional[Conversation]) -> str:
         if conversation is None or not len(conversation):
@@ -319,13 +390,19 @@ class ExpenseAssistant:
     def _answer(
         self, decision: RouteDecision, llm: LLMClient, tracer: Tracer,
         conversation: Optional[Conversation], user_text: str, has_image: bool,
-        prompt_id: str, stop_ok: str, request_text: str,
+        prompt_id: str, stop_ok: str, request_text: str, record_input: bool = True,
+        postprocess: Optional[Callable[[str], str]] = None,
     ) -> AssistantResult:
-        """Una llamada de texto, sin tools, con el historial de solo texto."""
+        """Una llamada de texto, sin tools, con el historial de solo texto.
+
+        `record_input=False` cuando la ruta ya registró `USER_INPUT` (la de política lo hace antes
+        de recuperar). `postprocess` ajusta el texto generado antes de entregarlo.
+        """
         from google.genai import types
 
         prior = text_history(list(conversation.contents)) if conversation is not None else []
-        self._record_input(tracer, decision, user_text, has_image, conversation, len(prior))
+        if record_input:
+            self._record_input(tracer, decision, user_text, has_image, conversation, len(prior))
         stored = user_text if user_text.strip() else IMAGE_NOTE  # nunca una parte de texto vacía
         sent = request_text + (f"\n{IMAGE_NOTE}" if has_image else "")
         contents = [*prior, types.Content(role="user", parts=[types.Part(text=sent)])]
@@ -335,9 +412,51 @@ class ExpenseAssistant:
             return self._finish(decision, tracer, conversation, stored, LLM_ERROR_TEXT,
                                 STOP_LLM_ERROR)
         if generated.text and generated.text.strip():
-            return self._finish(decision, tracer, conversation, stored, generated.text.strip(),
-                                stop_ok)
+            text = generated.text.strip()
+            if postprocess is not None:
+                text = postprocess(text)
+            return self._finish(decision, tracer, conversation, stored, text, stop_ok)
         return self._finish(decision, tracer, conversation, stored, EMPTY_ANSWER_TEXT, STOP_EMPTY)
+
+    def _policy(
+        self, decision: RouteDecision, llm: LLMClient, tracer: Tracer,
+        conversation: Optional[Conversation], user_text: str, has_image: bool,
+    ) -> AssistantResult:
+        """CONSULTAR_POLITICA (RAG): recuperar, decidir con el umbral y responder con las fuentes.
+
+        1. Sin base de conocimiento configurada: respuesta honesta, sin LLM (`rag_no_disponible`).
+        2. `retrieve`: embedding de la consulta, top-k y evento `RETRIEVAL`.
+        3. Mejor parecido bajo el umbral: texto fijo SIN llamada de generación (`rag_abstencion`).
+        4. Si no: UNA llamada con `RAG_PROMPT_v1` y los fragmentos como DATO (`ruta_politica`).
+        Cero tools en todos los caminos.
+        """
+        prior = len(text_history(list(conversation.contents))) if conversation is not None else 0
+        self._record_input(tracer, decision, user_text, has_image, conversation, prior)
+        stored = user_text if user_text.strip() else IMAGE_NOTE
+        knowledge = self._knowledge()
+        if knowledge is None:
+            return self._finish(decision, tracer, conversation, stored, RAG_UNAVAILABLE_TEXT,
+                                STOP_RAG_UNAVAILABLE)
+        try:
+            retrieval = retrieve(
+                user_text, knowledge.store, llm, tracer, knowledge.top_k, knowledge.threshold
+            )
+        except LLMCallError:
+            return self._finish(decision, tracer, conversation, stored, LLM_ERROR_TEXT,
+                                STOP_LLM_ERROR)
+        except (RagStoreError, EmbeddingError):
+            return self._finish(decision, tracer, conversation, stored, RAG_UNAVAILABLE_TEXT,
+                                STOP_RAG_UNAVAILABLE)
+        if not retrieval.sobre_umbral:
+            return self._finish(decision, tracer, conversation, stored, RAG_ABSTENTION_TEXT,
+                                STOP_RAG_ABSTAIN)
+        used = retrieval.usables
+        return self._answer(
+            decision, llm, tracer, conversation, user_text, has_image,
+            prompt_id=RAG_PROMPT_ID, stop_ok=STOP_POLICY,
+            request_text=build_rag_message(user_text, used), record_input=False,
+            postprocess=lambda answer: append_sources_if_missing(answer, used),
+        )
 
     def _chat(
         self, decision: RouteDecision, llm: LLMClient, tracer: Tracer,
@@ -419,8 +538,9 @@ def evaluate_route_case(
 ) -> dict[str, bool]:
     """Comprobaciones por condiciones (no por texto exacto) de un caso del router."""
     route_events = [e.data for e in tracer.events if e.event_type == EventType.ROUTE]
+    # Los embeddings (kind="embedding") no llevan bloque de alcance: no generan ni deciden nada.
     scopes = {e.data.get("security_scope_id") for e in tracer.events
-              if e.event_type == EventType.LLM_DECISION}
+              if e.event_type == EventType.LLM_DECISION and e.data.get("kind") != "embedding"}
     checks: dict[str, bool] = {
         f"ruta esperada {case['ruta']}": result.route == case["ruta"],
         "un evento ROUTE con la ruta ejecutada, sin respaldo": (

@@ -13,7 +13,10 @@ caso, un diccionario con esta forma (la arma `eval/run_eval.py` y las pruebas la
          "estado": {...},                            # `state_snapshot` al terminar el turno
          "filas_antes": int | None, "filas_despues": int | None,   # planilla (casos con Google)
          "filas_registradas": [int, ...],            # filas que devolvió registrar_gasto
-         "llamadas_llm": int, "alcances": [str, ...]},  # ids de alcance de cada llamada al LLM
+         "llamadas_llm": int, "alcances": [str, ...],  # ids de alcance de cada llamada al LLM
+         "retrievals": [{...}, ...],   # datos de cada evento RETRIEVAL (Etapa 15): decision, mejor_similitud,
+                                       # umbral y resultados [{chunk_id, fuente, seccion, similitud}]
+         "embeddings": int},           # llamadas de embeddings (LLM_DECISION con kind="embedding")
         ...
       ],
       "generado": {"fecha", "comercio", "monto", "categoria"} | None,  # recibo sintético del caso
@@ -41,10 +44,14 @@ from app.security import claimed_forbidden_action, leaked_canaries
 Evidence = dict[str, Any]
 Outcome = tuple[bool, str]
 
-CATEGORIES = ("extraccion", "flujo", "historial", "seguridad", "juez", "router", "memoria")
+CATEGORIES = ("extraccion", "flujo", "historial", "seguridad", "juez", "router", "memoria", "rag")
 JUDGE_VERDICTS = (APROBAR, PEDIR_CONFIRMACION, RECHAZAR)
 PENDING_KINDS = ("duplicado", "baja_confianza", "juez", "ninguna")
 COUNT_KEYS = ("exactamente", "min", "max")
+RETRIEVAL_DECISIONS = ("usar_contexto", "abstener")
+# Criterios que exigen una recuperación real: el caso necesita `"rag": true` (Redis del curso).
+RAG_REQUIRED_CRITERIA = ("retrieval_best_min", "cita_fuente_recuperada")
+_CITATION_RE = re.compile(r"\[([^\]§\[]+?)\s*§[^\]]*\]")
 EXPECTED_SOURCE_RE = re.compile(r"^(generado|expected\.json:[\w.\-]+)$")
 
 # Heurísticas sobre la respuesta (condiciones, no texto exacto; ver sus limitaciones en la documentación).
@@ -310,6 +317,17 @@ def _stop(ev: Evidence, c: dict[str, Any]) -> Outcome:
     return got == c["igual"], f"parada {got} (se esperaba {c['igual']})"
 
 
+@criterion("stop_en", required=("en",))
+def _stop_en(ev: Evidence, c: dict[str, Any]) -> Outcome:
+    turns = _select(ev, c, "ultimo")
+    if turns is None:
+        return _missing_turn(c)
+    if not turns:
+        return False, "sin turnos ejecutados"
+    got = turns[0].get("stop")
+    return got in c["en"], f"parada {got} (se esperaba una de {c['en']})"
+
+
 @criterion("memoria_total", required=("categoria",), one_of=("igual", "igual_a_monto_generado"))
 def _memoria_total(ev: Evidence, c: dict[str, Any]) -> Outcome:
     turns = _select(ev, c, "ultimo")
@@ -430,6 +448,104 @@ def _alcance_en_cada_llamada(ev: Evidence, c: dict[str, Any]) -> Outcome:
     return scopes == [expected], f"alcances en las llamadas: {scopes} (se esperaba solo {expected})"
 
 
+# -- Criterios del RAG (Etapa 15) -----------------------------------------------------------------
+def _retrievals(turns: list[dict[str, Any]]) -> Optional[list[dict[str, Any]]]:
+    """Eventos RETRIEVAL de los turnos, o `None` si la evidencia no los registra (el criterio falla)."""
+    if any("retrievals" not in t for t in turns):
+        return None
+    return [r for t in turns for r in (t.get("retrievals") or [])]
+
+
+@criterion("retrieval_count", one_of=COUNT_KEYS)
+def _retrieval_count(ev: Evidence, c: dict[str, Any]) -> Outcome:
+    turns = _select(ev, c, "todos")
+    if turns is None:
+        return _missing_turn(c)
+    found = _retrievals(turns)
+    if found is None:
+        return False, "la evidencia no registra los eventos RETRIEVAL"
+    ok, detail = _count_check(len(found), c)
+    return ok, f"recuperaciones {detail} en {_where(c)}"
+
+
+@criterion("embeddings_count", one_of=COUNT_KEYS)
+def _embeddings_count(ev: Evidence, c: dict[str, Any]) -> Outcome:
+    turns = _select(ev, c, "todos")
+    if turns is None:
+        return _missing_turn(c)
+    if any("embeddings" not in t for t in turns):
+        return False, "la evidencia no registra las llamadas de embeddings"
+    ok, detail = _count_check(sum(int(t["embeddings"] or 0) for t in turns), c)
+    return ok, f"llamadas de embeddings {detail} en {_where(c)}"
+
+
+@criterion("llamadas_llm_count", one_of=COUNT_KEYS)
+def _llamadas_llm_count(ev: Evidence, c: dict[str, Any]) -> Outcome:
+    """Llamadas de GENERACIÓN (router incluido; los embeddings no cuentan)."""
+    turns = _select(ev, c, "todos")
+    if turns is None:
+        return _missing_turn(c)
+    if any("llamadas_llm" not in t for t in turns):
+        return False, "la evidencia no registra las llamadas al LLM"
+    ok, detail = _count_check(sum(int(t["llamadas_llm"] or 0) for t in turns), c)
+    return ok, f"llamadas de generación {detail} en {_where(c)}"
+
+
+@criterion("retrieval_decision", required=("igual",), values={"igual": RETRIEVAL_DECISIONS})
+def _retrieval_decision(ev: Evidence, c: dict[str, Any]) -> Outcome:
+    """Todas las recuperaciones del alcance tienen la decisión indicada y hay al menos una.
+
+    Con `si_existe: true` se admite que no haya recuperación (la pregunta no llegó al recuperador).
+    """
+    turns = _select(ev, c, "todos")
+    if turns is None:
+        return _missing_turn(c)
+    found = _retrievals(turns)
+    if found is None:
+        return False, "la evidencia no registra los eventos RETRIEVAL"
+    if not found:
+        if c.get("si_existe") is True:
+            return True, "no hubo recuperación (admitido: la pregunta no llegó al recuperador)"
+        return False, "no hubo ningún evento RETRIEVAL"
+    decisions = [r.get("decision") for r in found]
+    return all(d == c["igual"] for d in decisions), f"decisiones {decisions} (se esperaba {c['igual']})"
+
+
+@criterion("retrieval_best_min")
+def _retrieval_best_min(ev: Evidence, c: dict[str, Any]) -> Outcome:
+    """El mejor parecido de la última recuperación alcanza `valor`, o el umbral del propio evento."""
+    turns = _select(ev, c, "todos")
+    if turns is None:
+        return _missing_turn(c)
+    found = _retrievals(turns)
+    if not found:
+        return False, "no hubo ningún evento RETRIEVAL (o la evidencia no lo registra)"
+    last = found[-1]
+    best = last.get("mejor_similitud")
+    limit = c["valor"] if "valor" in c else last.get("umbral")
+    if best is None or limit is None:
+        return False, "el evento RETRIEVAL no trae mejor_similitud o umbral"
+    return float(best) >= float(limit), f"mejor similitud {best} (mínimo {limit})"
+
+
+@criterion("cita_fuente_recuperada")
+def _cita_fuente_recuperada(ev: Evidence, c: dict[str, Any]) -> Outcome:
+    """La respuesta cita `[archivo §sección]` y el archivo es uno de los fragmentos recuperados."""
+    turns = _select(ev, c, "ultimo")
+    if turns is None:
+        return _missing_turn(c)
+    found = _retrievals(turns)
+    if not found:
+        return False, "no hubo ningún evento RETRIEVAL (o la evidencia no lo registra)"
+    retrieved = {str(r.get("fuente", "")).strip().casefold() for r in found[-1].get("resultados") or []}
+    retrieved.discard("")
+    cited = [m.strip() for m in _CITATION_RE.findall(_text(turns))]
+    matching = [name for name in cited if name.casefold() in retrieved]
+    if matching:
+        return True, f"cita una fuente recuperada: {matching[0]}"
+    return False, f"citas {cited} (ninguna está entre las recuperadas {sorted(retrieved)})"
+
+
 # -- Evaluación ------------------------------------------------------------------------------
 def evaluate_criterion(c: dict[str, Any], ev: Evidence) -> dict[str, Any]:
     """Evalúa un criterio y devuelve `{tipo, parametros, ok, detalle}`. Nunca lanza."""
@@ -481,6 +597,15 @@ def validate_criterion(c: Any, turns: Optional[int] = None) -> list[str]:
             problems.append("extraccion_coincide: campos debe ser una lista no vacía")
         if not isinstance(c.get("esperado_de"), str) or not EXPECTED_SOURCE_RE.match(c["esperado_de"]):
             problems.append("extraccion_coincide: esperado_de debe ser 'generado' o 'expected.json:<archivo>'")
+    if kind == "stop_en" and not (isinstance(c.get("en"), list) and c["en"]
+                                  and all(isinstance(x, str) for x in c["en"])):
+        problems.append("stop_en: en debe ser una lista no vacía de motivos de parada")
+    if kind == "retrieval_decision" and "si_existe" in c and not isinstance(c["si_existe"], bool):
+        problems.append("retrieval_decision: si_existe debe ser true o false")
+    if kind == "retrieval_best_min" and "valor" in c and (
+        isinstance(c["valor"], bool) or not isinstance(c["valor"], (int, float)) or not 0 <= c["valor"] <= 1
+    ):
+        problems.append("retrieval_best_min: valor debe ser un número entre 0 y 1")
     if kind == "ruta_en" and not (isinstance(c.get("en"), list) and set(c["en"]) <= set(ROUTES) and c["en"]):
         problems.append("ruta_en: en debe ser una lista no vacía de rutas válidas")
     return problems
@@ -538,6 +663,8 @@ def validate_golden_set(data: Any) -> list[str]:
             problems.append(f"{label}: categoria {case.get('categoria')!r} no está en {list(CATEGORIES)}")
         if not isinstance(case.get("google"), bool):
             problems.append(f"{label}: google debe ser true o false")
+        if "rag" in case and not isinstance(case["rag"], bool):
+            problems.append(f"{label}: rag debe ser true o false")
         inputs = case.get("entrada")
         generated = False
         if not isinstance(inputs, list) or not inputs:
@@ -558,6 +685,10 @@ def validate_golden_set(data: Any) -> list[str]:
             continue
         for c in criteria:
             problems.extend(f"{label}: {p}" for p in validate_criterion(c, turns=len(inputs)))
+            if isinstance(c, dict) and c.get("tipo") in RAG_REQUIRED_CRITERIA and case.get("rag") is not True:
+                problems.append(
+                    f"{label}: el criterio {c.get('tipo')} necesita recuperar y el caso no declara rag: true"
+                )
             if isinstance(c, dict) and not generated and (
                 c.get("esperado_de") == "generado" or c.get("igual_a_monto_generado")
                 or c.get("tipo") == "respuesta_contiene_monto_generado"

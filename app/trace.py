@@ -28,6 +28,8 @@ _SECRET_KEY_RE = re.compile(
 _PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"AIza[0-9A-Za-z_\-]{35}"),
     re.compile(r"\b\d{8,10}:[0-9A-Za-z_\-]{35}\b"),
+    # URL de Redis con usuario y clave (esquemas redis y rediss): se enmascara completa.
+    re.compile(r"rediss?://[^\s\"'<>]+", re.IGNORECASE),
     re.compile(r"Bearer\s+[0-9A-Za-z._~+/=\-]+", re.IGNORECASE),
     re.compile(
         r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(-----END [A-Z ]*PRIVATE KEY-----|\Z)",

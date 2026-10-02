@@ -1,6 +1,6 @@
 # Arquitectura de la solución implementada
 
-> Este documento describe la arquitectura **tal como quedó implementada** (Etapas 2 a 14). El diseño inicial de la Etapa 1 está en `docs/architecture.md`. Cada afirmación proviene del código en `app/`, `eval/` y `scripts/`; las cifras medidas provienen de `README.md` («Consumo medido»), `docs/evaluation.md` y `eval/results_v1.json`.
+> Este documento describe la arquitectura **tal como quedó implementada** (Etapas 2 a 15). El diseño inicial de la Etapa 1 está en `docs/architecture.md`. Cada afirmación proviene del código en `app/`, `eval/` y `scripts/`; las cifras medidas provienen de `README.md` («Consumo medido»), `docs/evaluation.md`, `eval/results_v1.json` y, para el RAG, de la verificación real del 2026-10-02 registrada en `docs/dev_prompts.md` (Etapa 15).
 
 ## Índice
 
@@ -21,9 +21,9 @@
 
 ## 1. Resumen
 
-El sistema es un agente académico que convierte la foto de un recibo en un gasto registrado y verificable: un LLM con visión extrae los datos, el recibo se guarda en Google Drive, el gasto se agrega a una planilla de Google Sheets y el usuario recibe una confirmación. Además responde consultas sobre los gastos registrados en la conversación.
+El sistema es un agente académico que convierte la foto de un recibo en un gasto registrado y verificable: un LLM con visión extrae los datos, el recibo se guarda en Google Drive, el gasto se agrega a una planilla de Google Sheets y el usuario recibe una confirmación. Además responde consultas sobre los gastos registrados en la conversación y preguntas sobre una política de rendición de gastos ficticia, recuperando fragmentos de un corpus guardado en el Redis del curso (RAG, Etapa 15).
 
-- **Entrega evaluada:** `notebooks/demo.ipynb` (Secciones 0 a 10 y «Resumen de consumo»). Se ejecuta sin Telegram.
+- **Entrega evaluada:** `notebooks/demo.ipynb` (Secciones 0 a 11 y «Resumen de consumo»). Se ejecuta sin Telegram.
 - **Demo aparte:** `app/telegram_bot.py`, un adaptador de entrada y salida sobre el mismo punto de entrada (`ExpenseAssistant.handle`). No contiene lógica del agente.
 - **Modelo de ejecución:** `gemini-3.5-flash-lite`, leído de la variable de entorno `LLM_MODEL` y usado a través del SDK oficial `google-genai` (`app/llm.py`). El modelo de desarrollo (Claude Code) no participa en la ejecución.
 - **Idea central:** el LLM decide, pero el código verifica. Las decisiones sobre qué herramienta usar son del LLM; los controles que no pueden depender del prompt (rieles, juez, deduplicación, saneamiento de errores, bloque de alcance) están en código.
@@ -34,7 +34,8 @@ Decisiones clave, con su referencia en la adenda de `docs/dev_prompts.md`:
 |---|---|---|
 | A11 | Drive y Sheets usan OAuth de usuario (cliente de escritorio, token local) con un único scope, `drive.file` | `app/google_auth.py` carga `secrets/token.json` sin abrir el navegador salvo el script de autorización |
 | A12 | Degradación controlada, sin simulaciones | Sin configuración de Google las tools devuelven un error estructurado que vuelve al LLM como observación; nunca se finge un éxito |
-| A13 | `SECURITY_SCOPE_v2` reemplaza a v1 como bloque de alcance vigente | `compose_system_instruction` lo antepone en toda llamada al LLM; la v1 se conserva en `PROMPTS` por trazabilidad |
+| A13 | `SECURITY_SCOPE_v2` reemplaza a v1 como bloque de alcance | `compose_system_instruction` lo antepone en toda llamada de generación; la v1 se conserva en `PROMPTS` por trazabilidad |
+| A14 | RAG con el Redis del curso, solo para la ruta `CONSULTAR_POLITICA`; `SECURITY_SCOPE_v3` reemplaza a v2 como bloque vigente | `app/rag/` (almacén, recuperador, indexador), `LLMClient.embed`, evento `RETRIEVAL`, `ROUTER_PROMPT_v3` y `RAG_PROMPT_v1`; la v1 y la v2 del alcance se conservan |
 
 ---
 
@@ -52,6 +53,8 @@ flowchart TB
     GEM["Gemini API<br/>modelo en LLM_MODEL"]
     DRV["Google Drive<br/>carpeta de prueba"]
     SHT["Google Sheets<br/>planilla de prueba"]
+    EMB["Gemini Embeddings<br/>gemini-embedding-2, 768 dimensiones"]
+    RDS["Redis del curso, compartido<br/>índice vectorial bajo el prefijo del grupo"]
     TGA["Telegram Bot API"]
     OAU["Google OAuth<br/>consentimiento y renovación de token"]
 
@@ -61,6 +64,8 @@ flowchart TB
     SYS -->|"visión, router, agente, juez, respuestas"| GEM
     SYS -->|"sube la imagen"| DRV
     SYS -->|"agrega una fila"| SHT
+    SYS -->|"embeddings de la consulta y del corpus"| EMB
+    SYS -->|"KNN sobre el índice y carga del corpus"| RDS
     SYS -->|"renueva token"| OAU
 
     subgraph Desarrollo["Fuera de la ejecución"]
@@ -69,7 +74,7 @@ flowchart TB
     CC -.->|"escribe el código, no participa en runtime"| SYS
 ```
 
-El sistema tiene dos tipos de usuario: el revisor, que ejecuta el notebook, y quien prueba la demo por Telegram, que se comunica con el sistema a través de la Bot API (el bot consulta mensajes por *polling*). El sistema depende de cuatro servicios externos: Gemini (todas las decisiones y la visión), Drive (almacenamiento de la imagen), Sheets (registro del gasto) y OAuth (credenciales de usuario para Drive y Sheets). Claude Code se muestra aparte con línea punteada: escribió el código, pero ninguna llamada de ejecución lo usa.
+El sistema tiene dos tipos de usuario: el revisor, que ejecuta el notebook, y quien prueba la demo por Telegram, que se comunica con el sistema a través de la Bot API (el bot consulta mensajes por *polling*). El sistema depende de seis servicios externos: Gemini (todas las decisiones y la visión), Gemini Embeddings (`gemini-embedding-2`, 768 dimensiones, para el RAG), Drive (almacenamiento de la imagen), Sheets (registro del gasto), OAuth (credenciales de usuario para Drive y Sheets) y el Redis del curso (índice vectorial del RAG). Ese Redis es compartido con otros grupos: el sistema solo usa su propio prefijo (`REDIS_PREFIX`) y lo emplea únicamente para el RAG; el estado y la conversación no se guardan allí. Claude Code se muestra aparte con línea punteada: escribió el código, pero ninguna llamada de ejecución lo usa.
 
 ---
 
@@ -81,7 +86,8 @@ flowchart TB
         NB["notebooks/demo.ipynb<br/>entrega evaluada"]
         TGB["app/telegram_bot.py<br/>demo"]
         EV["eval/run_eval.py<br/>golden set"]
-        VS["scripts/verify_stage_N.py<br/>verificación real, etapas 3 a 11"]
+        VS["scripts/verify_stage_N.py<br/>verificación real, etapas 3 a 15"]
+        LD["scripts/load_corpus.py<br/>carga del corpus en Redis"]
     end
 
     subgraph Nucleo["Núcleo de la aplicación"]
@@ -91,8 +97,10 @@ flowchart TB
             AG["ExpenseAgent<br/>loop ReAct y rieles<br/>app/agent.py"]
             QR["Consulta de gastos<br/>sin tools"]
             CH["Conversación<br/>sin tools"]
+            POL["Consulta de política RAG<br/>sin tools"]
             FX["Rechazo fijo<br/>sin LLM"]
         end
+        RAG["Recuperación RAG<br/>app/rag"]
         JG["judge_receipt<br/>app/judge.py"]
         MEM["Memoria y AgentState<br/>app/memory.py, app/models.py"]
         CV["Conversation<br/>app/conversation.py"]
@@ -108,10 +116,12 @@ flowchart TB
         CF["config<br/>app/config.py"]
         TR["Tracer<br/>app/trace.py"]
         SC["security<br/>app/security.py"]
+        VST["RedisVectorStore<br/>app/rag/store.py"]
     end
 
     subgraph Ext["Servicios externos"]
-        GM[("Gemini API")]
+        GM[("Gemini API<br/>generación y embeddings")]
+        RD[("Redis del curso<br/>RediSearch")]
         GD[("Google Drive")]
         GS[("Google Sheets")]
         TG[("Telegram Bot API")]
@@ -121,6 +131,7 @@ flowchart TB
     TGB --> AS
     EV --> AS
     VS --> AS
+    LD --> RAG
     TGB <--> TG
 
     AS --> RT
@@ -129,6 +140,11 @@ flowchart TB
     AS --> QR
     AS --> CH
     AS --> FX
+    AS --> POL
+    POL --> RAG
+    POL --> LC
+    RAG --> LC
+    RAG --> VST
     AG --> JG
     AG --> MEM
     AG --> CV
@@ -155,11 +171,13 @@ flowchart TB
     TR --> CF
 
     LC --> GM
+    VST --> RD
+    VST --> CF
     T2 --> GD
     T3 --> GS
 ```
 
-La capa de entrada tiene un único contrato: todos los puntos de entrada llaman a `ExpenseAssistant.handle(user_text, image_path, conversation, state, tracer)`. El núcleo clasifica el mensaje con una llamada al LLM (router) y ejecuta exactamente una de cuatro rutas; solo la ruta `REGISTRAR_RECIBO` declara tools. La capa de infraestructura aísla los servicios externos: `LLMClient` es el único acceso al LLM (reintentos, pausa, contadores y traza), las tools son los únicos accesos a Drive y Sheets, y `app/config.py` es el único lugar que lee el entorno. Las dependencias apuntan hacia adentro: el núcleo no conoce el SDK de Telegram ni los detalles HTTP de Google.
+La capa de entrada tiene un único contrato: todos los puntos de entrada llaman a `ExpenseAssistant.handle(user_text, image_path, conversation, state, tracer)`. El núcleo clasifica el mensaje con una llamada al LLM (router) y ejecuta exactamente una de cinco rutas; solo la ruta `REGISTRAR_RECIBO` declara tools. La capa de infraestructura aísla los servicios externos: `LLMClient` es el único acceso al LLM (generación y embeddings, con reintentos, pausa, contadores y traza), las tools son los únicos accesos a Drive y Sheets, `RedisVectorStore` es el único acceso al Redis del curso, y `app/config.py` es el único lugar que lee el entorno. Las dependencias apuntan hacia adentro: el núcleo no conoce el SDK de Telegram ni los detalles HTTP de Google.
 
 ---
 
@@ -170,6 +188,14 @@ flowchart LR
     subgraph assistant["app/assistant.py"]
         H["ExpenseAssistant.handle"]
         H2["_answer / _chat / _fixed"]
+        H3["_policy<br/>ruta CONSULTAR_POLITICA"]
+    end
+    subgraph rag["app/rag"]
+        RET["retrieve<br/>embed de la consulta, KNN y umbral"]
+        KB["load_knowledge_base<br/>KnowledgeBase"]
+        STO["RedisVectorStore<br/>knn, ensure_index, upsert, reset"]
+        IDX["indexer, chunking y corpus<br/>usados por scripts/load_corpus.py"]
+        FMT["formats<br/>plantillas de documento y de consulta"]
     end
     subgraph router["app/router.py"]
         RM["route_message"]
@@ -198,9 +224,10 @@ flowchart LR
     subgraph llm["app/llm.py"]
         GEN["LLMClient._generate"]
         GT["generate_text, generate_structured, generate_with_tools"]
+        EMBD["embed<br/>gemini-embedding-2, 768 dimensiones, sin bloque de alcance"]
     end
     subgraph prompts["app/prompts.py"]
-        CSI["compose_system_instruction<br/>inyecta SECURITY_SCOPE_v2"]
+        CSI["compose_system_instruction<br/>inyecta SECURITY_SCOPE_v3"]
     end
     subgraph tools["app/tools"]
         AN["analizar_recibo"]
@@ -219,6 +246,17 @@ flowchart LR
     RC --> GT
     H --> RUN
     H --> H2
+    H --> H3
+    H3 --> KB
+    H3 --> RET
+    H3 --> H2
+    RET --> FMT
+    RET --> EMBD
+    RET --> STO
+    IDX --> STO
+    IDX --> EMBD
+    EMBD --> TRC
+    EMBD --> CFG
     H2 --> GT
     H2 --> MR
     RUN --> RST
@@ -251,7 +289,7 @@ flowchart LR
     MP --> TRC
 ```
 
-`SECURITY_SCOPE_v2` se inyecta en un solo lugar: `LLMClient._generate` llama a `compose_system_instruction`, que antepone el bloque de alcance vigente al prompt de rol, y verifica que la instrucción empiece con él (si no, lanza `RuntimeError`). Por eso la garantía cubre las seis clases de llamada (router, consulta, conversación, agente, analizador y juez) sin que cada módulo deba recordarlo. Los rieles viven en `_Dispatcher`, entre la decisión del LLM y la tool real: el LLM puede pedir cualquier cosa, pero el despachador decide qué se ejecuta. El juez no es una tool del LLM: lo invoca `_do_analizar_recibo` después de cada análisis exitoso.
+El bloque de alcance vigente (`SECURITY_SCOPE_v3`) se inyecta en un solo lugar: `LLMClient._generate` llama a `compose_system_instruction`, que lo antepone al prompt de rol, y verifica que la instrucción empiece con él (si no, lanza `RuntimeError`). Por eso la garantía cubre las siete clases de llamada de generación (router, consulta de gastos, conversación, política con `RAG_PROMPT_v1`, agente, analizador y juez) sin que cada módulo deba recordarlo. `LLMClient.embed` queda fuera a propósito: un embedding no decide ni redacta nada, no recibe instrucción de sistema y solo devuelve un vector. La ruta de política (`_policy`) reutiliza `_answer` para la llamada con contexto; el recuperador (`retrieve`) solo conoce un `Embedder` y un almacén con `knn`, de modo que las pruebas lo ejercitan con dobles. Los rieles viven en `_Dispatcher`, entre la decisión del LLM y la tool real: el LLM puede pedir cualquier cosa, pero el despachador decide qué se ejecuta. El juez no es una tool del LLM: lo invoca `_do_analizar_recibo` después de cada análisis exitoso.
 
 ---
 
@@ -288,6 +326,7 @@ classDiagram
         TOOL_RESULT
         JUDGE_VERDICT
         MEMORY_UPDATE
+        RETRIEVAL
         RETRY
         STOP
         FINAL_RESPONSE
@@ -347,6 +386,27 @@ classDiagram
         +start_turn() int
         +register_image(path) str
     }
+    class Fragmento {
+        +str chunk_id
+        +str fuente
+        +str seccion
+        +str texto
+        +float similitud
+    }
+    class RetrievalResult {
+        +list fragmentos
+        +float mejor_similitud
+        +bool sobre_umbral
+        +float umbral
+        +int top_k
+        +decision() str
+        +usables() list
+    }
+    class KnowledgeBase {
+        +VectorStore store
+        +int top_k
+        +float threshold
+    }
 
     TraceEvent --> EventType
     AgentState "1" o-- "0..1" PendingConfirmation
@@ -355,9 +415,12 @@ classDiagram
     AssistantResult --> RouteDecision
     AssistantResult --> AgentState
     AssistantResult ..> Conversation : comparte historial
+    RetrievalResult "1" o-- "0..*" Fragmento : top-k ordenado por similitud
+    KnowledgeBase ..> RetrievalResult : retrieve usa store, top_k y umbral
+    TraceEvent ..> RetrievalResult : RETRIEVAL registra decision y fuentes, nunca el texto
 ```
 
-Los modelos de `app/models.py` son Pydantic v2; `JudgeVerdict` está en `app/judge.py`, `RouteDecision` (dataclass inmutable) en `app/router.py`, `AssistantResult` (dataclass) en `app/assistant.py` y `Conversation` (dataclass) en `app/conversation.py`. En `PendingConfirmation`, `tipo` es `duplicado`, `baja_confianza` o `juez`; `imagen` (ruta local) se excluye de la serialización, de modo que no llega al LLM ni a la traza. `AgentState` vive en memoria, una instancia por conversación, y solo lo modifica el código a partir de lo observado (nunca lo que diga el LLM); conserva los 5 gastos más recientes (`MAX_RECENT_EXPENSES`). Los valores válidos de `categoria` son Alimentación, Supermercado, Transporte, Entretenimiento, Salud, Hogar, Ropa y Otros, o `desconocido`; la confianza mínima para registrar sin confirmación es `CONFIDENCE_THRESHOLD = 0.7`.
+Los modelos de `app/models.py` son Pydantic v2; `JudgeVerdict` está en `app/judge.py`, `RouteDecision` (dataclass inmutable) en `app/router.py`, `AssistantResult` (dataclass) en `app/assistant.py` y `Conversation` (dataclass) en `app/conversation.py`. En `PendingConfirmation`, `tipo` es `duplicado`, `baja_confianza` o `juez`; `imagen` (ruta local) se excluye de la serialización, de modo que no llega al LLM ni a la traza. `RetrievalResult` (dataclass inmutable en `app/rag/retriever.py`) agrupa los fragmentos recuperados (`Fragmento` es un diccionario, no una clase), el mejor parecido y el umbral; su `decision` es `usar_contexto` si el mejor parecido alcanza el umbral y `abstener` si no, y `usables` son los fragmentos que llegan al contexto del LLM. `KnowledgeBase` (`app/rag/knowledge.py`) reúne el almacén y los parámetros `RAG_TOP_K` (3 por defecto) y `RAG_THRESHOLD` (0,75). Un fragmento nace del corpus como `Chunk` con `chunk_id` estable, fuente, sección y texto; en Redis es un HASH con los campos `chunk_id` y `fuente` (TAG), `seccion` y `texto` (TEXT) y `embedding` (VECTOR HNSW, FLOAT32, 768 dimensiones, COSINE). `AgentState` vive en memoria, una instancia por conversación, y solo lo modifica el código a partir de lo observado (nunca lo que diga el LLM); conserva los 5 gastos más recientes (`MAX_RECENT_EXPENSES`). Los valores válidos de `categoria` son Alimentación, Supermercado, Transporte, Entretenimiento, Salud, Hogar, Ropa y Otros, o `desconocido`; la confianza mínima para registrar sin confirmación es `CONFIDENCE_THRESHOLD = 0.7`.
 
 ---
 
@@ -384,7 +447,7 @@ sequenceDiagram
 
     U->>AS: handle con foto y texto
     AS->>RT: route_message
-    RT->>G: ROUTER_PROMPT_v2 JSON ruta y motivo
+    RT->>G: ROUTER_PROMPT_v3 JSON ruta y motivo
     G-->>RT: REGISTRAR_RECIBO
     Note over RT: eventos LLM_DECISION y ROUTE
     AS->>AG: run con conversation y state
@@ -514,7 +577,7 @@ sequenceDiagram
 
     Note over U,GS: Turno N más 1, sin imagen nueva
     U->>RT: Sí, regístralo de todas formas
-    RT->>G: ROUTER_PROMPT_v2 con confirmacion_pendiente duplicado
+    RT->>G: ROUTER_PROMPT_v3 con confirmacion_pendiente duplicado
     G-->>RT: REGISTRAR_RECIBO
     RT->>AG: run con la memoria
     AG->>AG: _restore_pending restaura análisis, imagen y veredicto del juez
@@ -549,7 +612,7 @@ sequenceDiagram
 
     U->>AS: handle con texto
     AS->>RT: route_message
-    RT->>G: ROUTER_PROMPT_v2
+    RT->>G: ROUTER_PROMPT_v3
     G-->>RT: ruta y motivo
     Note over RT: evento ROUTE con la ruta y fallback
 
@@ -571,7 +634,7 @@ sequenceDiagram
     AS-->>U: AssistantResult.final_text con cero TOOL_CALL
 ```
 
-Estas tres rutas no declaran tools, por lo que no puede haber eventos `TOOL_CALL` en ellas (lo verifican `tests/test_stage9_router.py::test_non_registrar_routes_never_expose_or_call_tools` y el criterio `sin_tool_calls` del golden set). El rechazo de `FUERA_DE_ALCANCE` es un texto fijo: es determinista, no consume cuota y ningún LLM redacta nada en esa rama. El mismo texto fijo de rechazo seguro (`SAFE_FALLBACK_TEXT`) se usa cuando el router falla: falla del LLM, JSON inválido o etiqueta desconocida dan `FUERA_DE_ALCANCE` con `fallback=True`; una entrada vacía da `CONVERSACION` sin llamar al LLM. El nombre del usuario solo entra al estado si es plausible y aparece literalmente en el mensaje.
+Estas tres rutas (y la de política, descrita en 6.g) no declaran tools, por lo que no puede haber eventos `TOOL_CALL` en ellas (lo verifican `tests/test_stage9_router.py::test_non_registrar_routes_never_expose_or_call_tools` y el criterio `sin_tool_calls` del golden set). El rechazo de `FUERA_DE_ALCANCE` es un texto fijo: es determinista, no consume cuota y ningún LLM redacta nada en esa rama. El mismo texto fijo de rechazo seguro (`SAFE_FALLBACK_TEXT`) se usa cuando el router falla: falla del LLM, JSON inválido o etiqueta desconocida dan `FUERA_DE_ALCANCE` con `fallback=True`; una entrada vacía da `CONVERSACION` sin llamar al LLM. El nombre del usuario solo entra al estado si es plausible y aparece literalmente en el mensaje.
 
 ### 6.e Modo degradado sin Google (A12)
 
@@ -627,7 +690,7 @@ sequenceDiagram
     participant TR as Tracer
 
     C->>LC: generate_text, generate_structured o generate_with_tools
-    LC->>LC: compone la instrucción con SECURITY_SCOPE_v2
+    LC->>LC: compone la instrucción con SECURITY_SCOPE_v3
     loop hasta 1 más max_retries intentos
         LC->>TH: pausa mínima respecto del último intento
         TH-->>LC: espera si pasó menos de LLM_MIN_SECONDS_BETWEEN_CALLS
@@ -648,7 +711,60 @@ sequenceDiagram
     LC-->>C: resultado
 ```
 
-Solo 429 y 503 (o los estados `RESOURCE_EXHAUSTED` y `UNAVAILABLE`) se reintentan. Los valores por defecto son 5 reintentos (`DEFAULT_LLM_MAX_RETRIES`, variable `LLM_MAX_RETRIES`), 4,0 s de pausa mínima (`DEFAULT_LLM_MIN_SECONDS_BETWEEN_CALLS`, variable `LLM_MIN_SECONDS_BETWEEN_CALLS`), base de espera de 2,0 s (`BACKOFF_BASE_SECONDS`) y tope de 60,0 s (`BACKOFF_MAX_SECONDS`); solo los dos primeros se configuran por entorno. Cada reintento se cuenta aparte (`UsageStats.retries`) y queda como evento `RETRY`. Al agotarse los intentos el cliente lanza `LLMCallError`, que cada llamador convierte en una respuesta segura (`error_llm`) en lugar de propagar la excepción. En la medición del notebook completo hubo 42 reintentos, todos 503, y ningún 429 (ver «Consumo medido» en `README.md`).
+Los embeddings (`LLMClient.embed`) usan el mismo bucle de reintentos (`_send_with_retries`) con contadores propios (`EmbedStats`). Solo 429 y 503 (o los estados `RESOURCE_EXHAUSTED` y `UNAVAILABLE`) se reintentan. Los valores por defecto son 5 reintentos (`DEFAULT_LLM_MAX_RETRIES`, variable `LLM_MAX_RETRIES`), 4,0 s de pausa mínima (`DEFAULT_LLM_MIN_SECONDS_BETWEEN_CALLS`, variable `LLM_MIN_SECONDS_BETWEEN_CALLS`), base de espera de 2,0 s (`BACKOFF_BASE_SECONDS`) y tope de 60,0 s (`BACKOFF_MAX_SECONDS`); solo los dos primeros se configuran por entorno. Cada reintento se cuenta aparte (`UsageStats.retries`) y queda como evento `RETRY`. Al agotarse los intentos el cliente lanza `LLMCallError`, que cada llamador convierte en una respuesta segura (`error_llm`) en lugar de propagar la excepción. En la medición del notebook completo hubo 42 reintentos, todos 503, y ningún 429 (ver «Consumo medido» en `README.md`).
+
+### 6.g Consulta de política con RAG
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as Usuario
+    participant AS as ExpenseAssistant
+    participant RT as Router
+    participant RET as Recuperador app/rag
+    participant G as Gemini via LLMClient
+    participant RD as Redis del curso
+
+    U->>AS: pregunta sobre la política de rendición
+    AS->>RT: route_message
+    RT->>G: ROUTER_PROMPT_v3 JSON ruta y motivo
+    G-->>RT: CONSULTAR_POLITICA
+    Note over AS: eventos LLM_DECISION, ROUTE y USER_INPUT
+
+    alt falta REDIS_URL o REDIS_PREFIX
+        AS-->>U: la base no está disponible, no se simula nada
+        Note over AS: STOP rag_no_disponible, sin embeddings ni generación
+    else Redis configurado
+        AS->>RET: retrieve con top_k 3 y umbral 0.75
+        RET->>G: embed de la consulta con plantilla task search result
+        Note over G: gemini-embedding-2, 768 dimensiones, sin bloque de alcance
+        G-->>RET: vector normalizado
+        Note over RET: evento LLM_DECISION con kind embedding
+        RET->>RD: FT.SEARCH KNN k 3 sobre el índice del prefijo
+        Note over RD: HNSW, FLOAT32, COSINE, dialecto 2
+        RD-->>RET: fragmentos con distancia coseno
+        Note over RET: similitud igual a 1 menos la distancia, evento RETRIEVAL
+
+        alt falla el embedding tras los reintentos
+            AS-->>U: texto seguro de error del LLM
+            Note over AS: STOP error_llm
+        else falla Redis o la respuesta de embeddings no es válida
+            AS-->>U: la base no está disponible
+            Note over AS: STOP rag_no_disponible
+        else mejor similitud mayor o igual que el umbral, decisión usar_contexto
+            AS->>G: RAG_PROMPT_v1 con los fragmentos como dato en contexto y la pregunta
+            G-->>AS: respuesta con citas archivo y sección
+            AS->>AS: append_sources_if_missing completa la cita si falta
+            AS-->>U: respuesta con las fuentes
+            Note over AS: STOP ruta_politica, cero TOOL_CALL
+        else mejor similitud menor que el umbral, decisión abstener
+            AS-->>U: texto fijo de abstención, sin llamada de generación
+            Note over AS: STOP rag_abstencion, cero TOOL_CALL
+        end
+    end
+```
+
+La ruta no declara tools. El router solo manda a `CONSULTAR_POLITICA` las preguntas sobre las reglas de rendición: «Hola», registrar un recibo o preguntar por los gastos propios no recuperan, así que no hay embedding ni consulta al Redis (caso GS12 del golden set v2). La decisión de recuperar es doble: el router decide si la pregunta necesita el corpus y el recuperador decide con el umbral si lo recuperado alcanza para responder. El umbral de 0,75 salió de calibrarlo con `scripts/calibrate_rag_threshold.py`: las preguntas dentro del corpus dieron un mejor parecido de 0,7929 a 0,8283 y las de fuera de 0,5148 a 0,6988, un margen de 0,0941; el valor provisional de 0,60 habría aceptado dos preguntas ajenas. Bajo el umbral no se llama al LLM de generación: la única llamada del turno es el embedding de la consulta. Los fragmentos viajan como dato entre `<contexto>` y `<pregunta>`, neutralizando `<` y `>`, y `SECURITY_SCOPE_v3` los trata como dato y no como instrucción. La verificación real del 2026-10-02 (`scripts/verify_stage_15.py`, `RESULTADO: OK`) mostró los tres caminos: una pregunta sobre propinas con mejor parecido 0,8078 y cita de `politica_rendicion_gastos_v2.md §4. Propinas` (0 tools); «Hola» sin recuperación ni embeddings; y una pregunta sobre un hotel en el extranjero con mejor parecido 0,6988, abstención sin generación y parada `rag_abstencion`.
 
 ---
 
@@ -672,7 +788,7 @@ stateDiagram-v2
     MaxSteps --> [*] : STOP max_steps, las tools pedidas no se ejecutan
 ```
 
-`MAX_STEPS = 6` (en `app/agent.py`) es un límite de decisiones del LLM, no de tools: si la sexta decisión aún pide tools, esas llamadas no se ejecutan y la respuesta segura solo afirma lo que el código observó (por ejemplo, la fila registrada si existe). En todas las salidas distintas de `respuesta_final` el agente agrega a la conversación un mensaje del modelo con el texto seguro entregado, para que los roles sigan alternando. Una ruta sin tools usa otros motivos de `STOP`: `ruta_consulta`, `ruta_conversacion` y `ruta_fuera_de_alcance`, además de `error_llm` y `respuesta_vacia`.
+`MAX_STEPS = 6` (en `app/agent.py`) es un límite de decisiones del LLM, no de tools: si la sexta decisión aún pide tools, esas llamadas no se ejecutan y la respuesta segura solo afirma lo que el código observó (por ejemplo, la fila registrada si existe). En todas las salidas distintas de `respuesta_final` el agente agrega a la conversación un mensaje del modelo con el texto seguro entregado, para que los roles sigan alternando. Una ruta sin tools usa otros motivos de `STOP`: `ruta_consulta`, `ruta_conversacion`, `ruta_fuera_de_alcance` y, en la ruta de política, `ruta_politica`, `rag_abstencion` y `rag_no_disponible`, además de `error_llm` y `respuesta_vacia`.
 
 ### 7.b Ciclo de vida de la confirmación pendiente
 
@@ -703,6 +819,30 @@ stateDiagram-v2
 
 Hay una sola confirmación pendiente por conversación (`AgentState.confirmacion_pendiente`). Una pendiente del juez cubre también el duplicado y la baja confianza del mismo recibo, porque la observación los informó juntos; por eso `_ensure_pending` no sustituye una pendiente `juez` por otra de menor jerarquía. El rechazo definitivo se guarda en `recibos_rechazados`; el estado «Confirmada» es transitorio y dura el resto de la ejecución (`confirmed_key`). La falla del juez (`juez_no_disponible`) no entra al ciclo: bloquea la ejecución actual pero no se guarda como rechazo y el siguiente análisis vuelve a llamar al juez.
 
+### 7.c Resultado de una consulta de política (CONSULTAR_POLITICA)
+
+```mermaid
+stateDiagram-v2
+    [*] --> Enrutada : el router elige CONSULTAR_POLITICA
+    Enrutada --> SinBase : falta REDIS_URL o REDIS_PREFIX
+    Enrutada --> Recuperando : base configurada, embed de la consulta y KNN
+    Recuperando --> ErrorLLM : LLMCallError del embedding
+    Recuperando --> SinBase : RagStoreError o EmbeddingError
+    Recuperando --> Evaluar : evento RETRIEVAL con el mejor parecido
+    Evaluar --> Abstencion : mejor parecido menor que el umbral
+    Evaluar --> Responder : mejor parecido mayor o igual que el umbral
+    Responder --> RespuestaConFuentes : una llamada con RAG_PROMPT_v1
+    Responder --> ErrorLLM : LLMCallError de la generación
+    Responder --> RespuestaVacia : el LLM no devolvió texto
+    SinBase --> [*] : STOP rag_no_disponible
+    Abstencion --> [*] : STOP rag_abstencion, texto fijo sin generar
+    RespuestaConFuentes --> [*] : STOP ruta_politica
+    ErrorLLM --> [*] : STOP error_llm
+    RespuestaVacia --> [*] : STOP respuesta_vacia
+```
+
+Cada rama termina con `FINAL_RESPONSE` y `STOP`, y ninguna ejecuta tools. La abstención y la falta de base son respuestas fijas del código: el texto de abstención usa la frase de información insuficiente de `RAG_PROMPT_v1` y no inventa una regla; el de base no disponible informa con honestidad que no se pudo responder (A12: nada se simula).
+
 ---
 
 ## 8. Diagrama de despliegue y ejecución
@@ -715,13 +855,15 @@ flowchart TB
             APP["Paquete app<br/>ExpenseAssistant y adaptadores"]
             BOT["Proceso opcional<br/>python -m app.telegram_bot"]
             EVP["Proceso opcional<br/>eval/run_eval.py"]
+            LDR["Proceso opcional<br/>scripts/load_corpus.py"]
         end
         subgraph FS["Archivos locales"]
             ENV[".env<br/>variables, no versionado"]
             TOK["secrets/token.json<br/>token OAuth, no versionado"]
             TRA["traces/*.jsonl<br/>no versionado"]
             REC["data/receipts<br/>recibos sintéticos"]
-            RES["eval/results_v1.json<br/>versionado"]
+            COR["data/corpus<br/>corpus sintético del RAG"]
+            RES["eval/results_vN.json<br/>versionado"]
         end
     end
 
@@ -730,11 +872,15 @@ flowchart TB
         GDRV["Google Drive API v3"]
         GSHT["Google Sheets API v4"]
         TAPI["Telegram Bot API"]
+        GEMB["Gemini Embeddings API<br/>gemini-embedding-2"]
+        RDS["Redis del curso, compartido<br/>RediSearch, solo el prefijo del grupo"]
     end
 
     KER --> APP
     BOT --> APP
     EVP --> APP
+    LDR --> APP
+    LDR -->|"lee"| COR
     APP -->|"lee"| ENV
     APP -->|"lee y renueva"| TOK
     APP -->|"escribe"| TRA
@@ -743,10 +889,12 @@ flowchart TB
     APP -->|"HTTPS"| GAPI
     APP -->|"HTTPS"| GDRV
     APP -->|"HTTPS"| GSHT
+    APP -->|"HTTPS"| GEMB
+    APP -->|"conexión saliente con REDIS_URL"| RDS
     BOT -->|"HTTPS polling"| TAPI
 ```
 
-Todo se ejecuta en el equipo de quien lo usa: no hay servidor, contenedor, base de datos ni cola. El estado de conversación (`Conversation`, `AgentState`) vive en la memoria del proceso y se pierde al cerrarlo; lo único persistente son las trazas, el token OAuth y lo que ya está en Drive y Sheets. Las conexiones son todas salientes por HTTPS. Para el notebook solo se requieren `GEMINI_API_KEY` y `LLM_MODEL`; las variables de Google activan el registro real y las de Telegram solo afectan a la demo. Las credenciales se leen del entorno y de archivos locales ignorados por git, nunca del código ni del notebook.
+Todo se ejecuta en el equipo de quien lo usa: no hay servidor, contenedor, base de datos propia ni cola. El estado de conversación (`Conversation`, `AgentState`) vive en la memoria del proceso y se pierde al cerrarlo; lo único persistente son las trazas, el token OAuth, lo que ya está en Drive y Sheets y el índice del corpus en el Redis del curso. Ese Redis es un servicio compartido que provee el curso (el sistema no lo despliega ni lo administra) y se usa solo para el RAG, bajo el prefijo de grupo `REDIS_PREFIX`: la carga (`scripts/load_corpus.py`) y el reinicio con `--force` solo tocan el índice `{prefijo}:rag:idx`, las claves `{prefijo}:rag:chunk:*` y la firma `{prefijo}:rag:firma`. Las conexiones son todas salientes. Para el notebook solo se requieren `GEMINI_API_KEY` y `LLM_MODEL`; las variables de Google activan el registro real, `REDIS_URL` y `REDIS_PREFIX` activan la ruta de política (sin ellas responde con honestidad que la base no está disponible) y las de Telegram solo afectan a la demo. Las credenciales se leen del entorno y de archivos locales ignorados por git, nunca del código ni del notebook.
 
 ---
 
@@ -754,7 +902,7 @@ Todo se ejecuta en el equipo de quien lo usa: no hay servidor, contenedor, base 
 
 | Capa | Control | Dónde en el código | Prueba |
 |---|---|---|---|
-| Alcance del LLM | `SECURITY_SCOPE_v2` antepuesto a toda instrucción de sistema; un bloque de alcance no puede usarse como rol | `compose_system_instruction` en `app/prompts.py` y verificación en `LLMClient._generate` | `tests/test_stage8_security.py` (`test_compose_always_prepends_active_scope_for_every_role`, `test_scope_is_in_every_public_llm_call_path_and_trace`) |
+| Alcance del LLM | `SECURITY_SCOPE_v3` (vigente; v1 y v2 se conservan) antepuesto a toda instrucción de sistema de generación; un bloque de alcance no puede usarse como rol | `compose_system_instruction` en `app/prompts.py` y verificación en `LLMClient._generate` | `tests/test_stage8_security.py` (`test_compose_always_prepends_active_scope_for_every_role`, `test_scope_is_in_every_public_llm_call_path_and_trace`) |
 | Flujo | Rutas sin tools; el router solo clasifica y ante una falla cae en `FUERA_DE_ALCANCE` | `app/router.py`, `ExpenseAssistant._handle` en `app/assistant.py` | `tests/test_stage9_router.py` (`test_non_registrar_routes_never_expose_or_call_tools`, `test_invalid_or_failed_router_output_falls_back_to_the_safe_route`) |
 | Datos como dato | Mensaje, estado y datos extraídos van entre etiquetas y se neutralizan `<` y `>` | `_neutralize` en `app/router.py`, `app/assistant.py`, `app/judge.py` | `tests/test_stage9_router.py::test_state_and_question_cannot_close_the_data_delimiters` |
 | Herramientas | Solo tres tools; ninguna mueve dinero ni borra | `build_tool_declarations` en `app/agent.py` | `tests/test_stage8_security.py::test_only_three_tools_are_declared_and_none_can_move_money` |
@@ -767,9 +915,13 @@ Todo se ejecuta en el equipo de quien lo usa: no hay servidor, contenedor, base 
 | Filtración de prompt | Frases canario y afirmaciones de acciones prohibidas (heurísticas) | `check_boundaries` en `app/security.py` | `tests/test_stage8_security.py` (`test_leaked_canaries_detects_prompt_fragments_case_insensitively`, `test_claimed_forbidden_action_detects_affirmative_claims`) |
 | Credenciales | Solo variables de entorno; las variables OAuth deben ser rutas a `.json`; scope único `drive.file`; sin navegador en modo no interactivo | `app/config.py`, `app/google_auth.py` | `tests/test_stage2_config.py::test_oauth_variables_must_be_json_paths`; `tests/test_stage4_drive.py::test_load_credentials_non_interactive_never_opens_browser`; `tests/test_repo_hygiene.py` |
 | Trazas | Enmascarado de secretos antes de consola y archivo | `mask_value` y `Tracer` en `app/trace.py` | `tests/test_stage2_trace.py::test_secrets_masked_in_console_and_file` |
+| Corpus como dato | Los fragmentos recuperados van entre `<contexto>` y `<pregunta>` con `<` y `>` neutralizados, y `SECURITY_SCOPE_v3` los trata como dato, no como instrucción: una orden escondida en un documento no puede cerrar el delimitador ni ejecutarse. La ruta no tiene tools | `build_rag_message` en `app/assistant.py`; `SECURITY_SCOPE_v3` en `app/prompts.py` | `tests/test_stage15_rag.py::test_retrieved_text_is_data_and_cannot_close_the_prompt_delimiters`; caso GS14 del golden set v2 (inyección en la pregunta de política) |
+| `REDIS_URL` secreta | La URL incluye la contraseña: solo vive en `.env`, está en `SECRET_VARIABLES`, el trazador enmascara cualquier URL `redis` o `rediss` completa aunque la variable no esté definida, y los errores de Redis se reducen al nombre de la clase (sin host) | `app/config.py`, `mask_value` en `app/trace.py`, `_redis_errors` en `app/rag/store.py` | `tests/test_stage15_rag.py` (`test_redis_url_is_masked_in_the_trace_even_without_the_variable`, `test_no_url_with_credentials_is_written_anywhere_in_the_repository`, `test_redis_errors_are_reduced_to_the_class_name_without_the_host`) |
+| Aislamiento por prefijo | Redis es compartido con otros grupos: todos los nombres salen de `REDIS_PREFIX` (validado con `[A-Za-z0-9_-]+`) y el código nunca consulta ni escribe otro prefijo | `validate_prefix`, `index_name_for`, `key_prefix_for` en `app/rag/store.py` | `tests/test_stage15_rag.py` (`test_names_are_built_from_the_group_prefix`, `test_empty_or_unsafe_prefixes_are_refused`) |
+| Reinicio solo de lo propio | `RedisVectorStore.reset` borra únicamente el índice, las claves `{prefijo}:rag:chunk:*` y la firma propios, y vuelve a comprobar cada clave antes de borrarla | `reset` en `app/rag/store.py` | `tests/test_stage15_rag.py::test_reset_drops_only_our_index_and_keys_never_other_prefixes` |
 | Telegram | Lista de chats autorizados, sesión aislada por chat, token enmascarado en registros, loggers de `httpx` y `telegram` en WARNING | `TelegramBot`, `install_log_protection` en `app/telegram_bot.py` | `tests/test_stage13_telegram.py` (`test_allowlist_blocks_other_chats_without_calling_agent`, `test_token_never_in_logs_or_trace`, `test_two_chats_are_isolated`) |
 
-Las pruebas de la forma `tests/test_stageN_live.py` y los scripts `scripts/verify_stage_N.py` ejercen estos controles con servicios reales; no se listan arriba porque requieren credenciales. Las heurísticas de texto (canarios y afirmaciones prohibidas) no entienden todas las paráfrasis: la garantía fuerte es estructural (no existe una tool para transferir ni borrar y la traza muestra cero llamadas a herramientas).
+Las pruebas de la forma `tests/test_stageN_live.py` (incluida `tests/test_stage15_live.py`, con el Redis del curso) y los scripts `scripts/verify_stage_N.py` ejercen estos controles con servicios reales; no se listan arriba porque requieren credenciales. Las heurísticas de texto (canarios y afirmaciones prohibidas) no entienden todas las paráfrasis: la garantía fuerte es estructural (no existe una tool para transferir ni borrar y la traza muestra cero llamadas a herramientas).
 
 ---
 
@@ -781,17 +933,18 @@ Las pruebas de la forma `tests/test_stageN_live.py` y los scripts `scripts/verif
 |---|---|---|
 | `USER_INPUT` | `ExpenseAgent.run` y `ExpenseAssistant._record_input` | texto, si hay imagen, turno, mensajes de historial, ruta o `restored_pending` |
 | `ROUTE` | `route_message` | ruta, motivo, `fallback`, `fallback_reason`, `pending_confirmation`, `prompt_id` |
-| `LLM_DECISION` | `LLMClient._generate` | modelo, tipo de llamada, `system_prompt_id`, `security_scope_id`, parámetros, uso de tokens, latencia, intentos, estado |
+| `LLM_DECISION` | `LLMClient._generate` y `LLMClient.embed` | modelo, tipo de llamada, `system_prompt_id`, `security_scope_id`, parámetros, uso de tokens, latencia, intentos, estado; los embeddings llevan `kind="embedding"`, `purpose`, `n_texts` y `dims`, sin bloque de alcance ni textos ni vectores |
 | `TOOL_CALL` y `TOOL_RESULT` | `ExpenseAgent.run` (y cada tool en su propio trazador) | nombre, argumentos, resultado saneado, `diagnostic` si se ocultó un detalle |
 | `JUDGE_VERDICT` | `judge_receipt` y `_run_judge` (veredicto reutilizado) | veredicto, motivo, señales, `prompt_id`, modelo, `fallback` |
 | `MEMORY_UPDATE` | operaciones de `app/memory.py` | `operacion` (`record_expense`, `set_user_name`, `set_pending_confirmation`, `clear_pending_confirmation`, `reject_receipt`), `antes`, `despues`, `motivo` |
-| `RETRY` | `LLMClient._generate` | `attempt`, `max_retries`, `wait_seconds`, `error_code`, `error_status` |
+| `RETRIEVAL` | `retrieve` en `app/rag/retriever.py` | pregunta (acotada), `top_k`, `umbral`, `mejor_similitud`, `resultados` (`chunk_id`, `fuente`, `seccion`, `similitud`; nunca el texto del fragmento) y `decision` (`usar_contexto` o `abstener`) |
+| `RETRY` | `LLMClient._generate` y `LLMClient.embed` | `attempt`, `max_retries`, `wait_seconds`, `error_code`, `error_status` |
 | `STOP` | agente y rutas sin tools | motivo, pasos, `security_scope_id` |
 | `FINAL_RESPONSE` | agente y rutas sin tools | texto final y motivo de parada |
 
-**Enmascarado.** `mask_value` actúa antes de mostrar o escribir cada evento: reemplaza por `***` los valores de las variables secretas definidas (`GEMINI_API_KEY`, `GOOGLE_OAUTH_CLIENT_SECRETS`, `GOOGLE_OAUTH_TOKEN`, `TELEGRAM_BOT_TOKEN`, de 4 o más caracteres), los secretos adicionales del `Tracer`, patrones conocidos (claves `AIza…`, tokens de bot, `Bearer`, claves privadas, rutas a archivos de credenciales o a `secrets/`) y el valor de cualquier campo cuyo nombre indique un secreto. Las métricas como `prompt_token_count` y claves de deduplicación no se enmascaran. `LLMClient` nunca registra la clave, el texto de los prompts ni los bytes de las imágenes, y `PendingConfirmation.imagen` queda fuera de la serialización.
+**Enmascarado.** `mask_value` actúa antes de mostrar o escribir cada evento: reemplaza por `***` los valores de las variables secretas definidas (`GEMINI_API_KEY`, `GOOGLE_OAUTH_CLIENT_SECRETS`, `GOOGLE_OAUTH_TOKEN`, `TELEGRAM_BOT_TOKEN` y `REDIS_URL`, de 4 o más caracteres), cualquier URL `redis` o `rediss` completa, los secretos adicionales del `Tracer`, patrones conocidos (claves `AIza…`, tokens de bot, `Bearer`, claves privadas, rutas a archivos de credenciales o a `secrets/`) y el valor de cualquier campo cuyo nombre indique un secreto. Las métricas como `prompt_token_count` y claves de deduplicación no se enmascaran. `LLMClient` nunca registra la clave, el texto de los prompts ni los bytes de las imágenes, y `PendingConfirmation.imagen` queda fuera de la serialización.
 
-**Contadores.** `LLMClient.stats` y `session_stats()` acumulan llamadas, llamadas fallidas, reintentos y tokens por cliente y por proceso; la última celda del notebook imprime el resumen. Ejemplos de trazas reales están en `docs/trace_examples.md`.
+**Contadores.** `LLMClient.stats` y `session_stats()` acumulan llamadas, llamadas fallidas, reintentos y tokens por cliente y por proceso; los embeddings tienen contadores propios (`LLMClient.embed_stats` y `session_embed_stats()`, con llamadas, fallas, reintentos y textos); la última celda del notebook imprime el resumen. Ejemplos de trazas reales están en `docs/trace_examples.md`.
 
 ---
 
@@ -799,7 +952,7 @@ Las pruebas de la forma `tests/test_stageN_live.py` y los scripts `scripts/verif
 
 ```mermaid
 flowchart LR
-    GS["eval/golden_set_v1.json<br/>13 casos"]
+    GS["eval/golden_set_v2.json<br/>17 casos: v1 más 4 del RAG"]
     VAL["validate_golden_set<br/>eval/criteria.py"]
     RUN["eval/run_eval.py<br/>execute_run y run_case"]
     ASS["ExpenseAssistant<br/>juez y tools reales"]
@@ -807,6 +960,9 @@ flowchart LR
     GOOG{"El caso usa Google real"}
     REAL["Drive y Sheets de prueba"]
     BLK["Tools reales con Google en blanco<br/>degradación A12"]
+    RAGQ{"El caso es rag true"}
+    RDOK["Redis del curso con el índice cargado"]
+    RDNO["PENDIENTE sin REDIS_URL o REDIS_PREFIX<br/>OMITIDO con --no-rag"]
     CRI["evaluate_case<br/>criterios por condiciones"]
     EST["Estado del caso<br/>APROBADO, FALLIDO, ERROR, PENDIENTE, OMITIDO"]
     OUT["eval/results_vN.json"]
@@ -819,6 +975,9 @@ flowchart LR
     PROBE --> GOOG
     GOOG -->|"sí"| REAL
     GOOG -->|"no"| BLK
+    ASS --> RAGQ
+    RAGQ -->|"sí y configurado"| RDOK
+    RAGQ -->|"sí y sin configuración"| RDNO
     ASS --> CRI
     PROBE --> CRI
     CRI --> EST
@@ -826,9 +985,9 @@ flowchart LR
     RUN --> TRC
 ```
 
-El arnés usa el `ExpenseAssistant` real con el juez de producción y el `LLMClient` habitual, de modo que respeta la pausa mínima y los reintentos. Cada caso corre con una `Conversation` y un `AgentState` nuevos; sus criterios son condiciones verificables, no textos exactos, y un criterio sin evidencia falla. El archivo de resultados se guarda después de cada caso y una cuota agotada deja el caso `PENDIENTE` y la corrida interrumpida (código de salida 3), nunca aprobada.
+El arnés usa el `ExpenseAssistant` real con el juez de producción y el `LLMClient` habitual, de modo que respeta la pausa mínima y los reintentos. Cada caso corre con una `Conversation` y un `AgentState` nuevos; sus criterios son condiciones verificables, no textos exactos, y un criterio sin evidencia falla. El golden set vigente es v2: los 13 casos de v1 sin cambios más GS11 a GS14 (RAG: pregunta del corpus con cita, saludo sin recuperar, pregunta fuera del corpus con abstención e inyección en la pregunta de política), que llevan `rag: true` y necesitan el Redis del curso; la evidencia de cada turno incluye ahora los eventos `RETRIEVAL` y las llamadas de embeddings, que no cuentan como llamadas de generación. El archivo de resultados se guarda después de cada caso y una cuota agotada deja el caso `PENDIENTE` y la corrida interrumpida (código de salida 3), nunca aprobada.
 
-**Resultado real de la corrida v1** (`eval/results_v1.json`, modelo `gemini-3.5-flash-lite`, bloque de alcance `SECURITY_SCOPE_v2`, 2026-10-01): 13 casos, 13 `APROBADO`, 0 fallidos, 0 errores, 0 pendientes, tasa de aprobación 1,0, 65 llamadas al LLM, 119.912 tokens, sin interrupción. Detalle y política de versionado en `docs/evaluation.md`.
+**Resultado real de la corrida v1** (`eval/results_v1.json`, modelo `gemini-3.5-flash-lite`, bloque de alcance `SECURITY_SCOPE_v2`, 2026-10-01): 13 casos, 13 `APROBADO`, 0 fallidos, 0 errores, 0 pendientes, tasa de aprobación 1,0, 65 llamadas al LLM, 119.912 tokens, sin interrupción. Detalle y política de versionado en `docs/evaluation.md`. **La corrida del golden set v2 sobre el sistema con RAG (`eval/results_v2.json`) está pendiente**; mientras no exista, esa evidencia no se cita.
 
 ---
 
@@ -846,6 +1005,8 @@ El arnés usa el `ExpenseAssistant` real con el juez de producción y el `LLMCli
 | Memoria estructurada `AgentState` mantenida solo por código | Que el LLM resuma o recuerde los totales | Las cifras salen de lo observado; el LLM solo las redacta | `app/memory.py` |
 | Confirmación solo en un turno posterior; `permitir_duplicado` fuera de las declaraciones de tools | Aceptar la confirmación en el mismo mensaje | El LLM no puede autoconfirmarse ni omitir la deduplicación | Etapa 10 |
 | Planilla de solo agregar (`values.append`, `RAW`) | Edición o borrado de filas | Permite repetir la acción con seguridad; borrar queda fuera de alcance | `app/tools/sheets.py` |
-| Estado y conversación en memoria, sin persistencia | Base de datos o Redis | No hay servidor ni dependencias adicionales; el stack permitido no incluye bases de datos | `AGENTS.md`, Etapa 10 |
+| Estado y conversación en memoria, sin persistencia. Redis se usa SOLO para el RAG (índice del corpus), nunca para el estado | Guardar el estado o la conversación en una base de datos o en Redis | No hay servidor propio ni persistencia que gestionar; el stack permitido excluye bases de datos y solo admite el Redis del curso para el RAG | `AGENTS.md` (excepción A14), Etapa 10 |
+| RAG con el Redis del curso y una ruta `CONSULTAR_POLITICA` con abstención bajo un umbral | Mantener «Sin RAG» (decisión de la Etapa 1, revertida el 2026-10-02); un índice local alternativo; responder las preguntas de política con el LLM sin corpus | Las reglas de rendición no están en el recibo ni en el estado y un LLM sin corpus las inventaría; la pauta exige el Redis del curso y no admite un índice local; abstenerse sin llamar al LLM evita respuestas sin base | A14, `docs/architecture.md` §11 |
+| Embeddings `gemini-embedding-2` con 768 dimensiones, índice HNSW con COSINE y umbral 0,75 calibrado | `gemini-embedding-001` truncado a 768 (norma 0,5863: habría que normalizar a mano); 3072 dimensiones por defecto; el umbral provisional de 0,60 | `gemini-embedding-2` es gratuito, estable y devuelve vectores normalizados también con 768 dimensiones; HNSW con coseno es lo que ofrece RediSearch para vectores; el 0,60 habría aceptado 2 de 4 preguntas fuera del corpus, mientras que 0,75 queda dentro del margen medido (peor acierto 0,7929, mejor fallo 0,6988) | A14, `scripts/calibrate_rag_threshold.py` |
 | Notebook como entrega y Telegram como demo aparte | Notebook con Telegram | El revisor puede ejecutarlo sin crear un bot | `docs/architecture.md` |
 | Temperatura 0,0 en extracción, agente, router, respuestas y juez | Temperatura 1,0 recomendada por Google para Gemini 3 | Reproducibilidad; la verificación real de la Etapa 3 mostró que el modelo acepta 0,0 en extracción, y el riesgo de bucles del agente está acotado por `MAX_STEPS` | `app/llm.py` |

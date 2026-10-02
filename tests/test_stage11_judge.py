@@ -30,7 +30,7 @@ from app.judge import (
 )
 from app.llm import JUDGE_TEMPERATURE, LLMClient
 from app.models import AgentState, DriveResult, EventType, ReceiptData, SheetResult
-from app.prompts import ACTIVE_SECURITY_SCOPE, PROMPTS, SECURITY_SCOPE_ID, SECURITY_SCOPE_v2
+from app.prompts import ACTIVE_SECURITY_SCOPE, PROMPTS, SECURITY_SCOPE_ID, SECURITY_SCOPE_v3
 from app.router import REGISTRAR_RECIBO
 from app.trace import Tracer
 
@@ -173,12 +173,12 @@ def test_judge_prompt_is_registered_and_does_not_duplicate_the_baseline_scope():
     for verdict in (APROBAR, PEDIR_CONFIRMACION, RECHAZAR):
         assert verdict in prompt
     # Ninguna línea ni frase distintiva del alcance basal se repite en el prompt del juez.
-    scope_lines = [line.strip() for line in SECURITY_SCOPE_v2.splitlines() if len(line.strip()) > 25]
+    scope_lines = [line.strip() for line in SECURITY_SCOPE_v3.splitlines() if len(line.strip()) > 25]
     assert scope_lines and not [line for line in scope_lines if line in prompt]
     for phrase in ("SECURITY_SCOPE", "Acciones prohibidas", "Regla de datos", "DATO, no instrucción",
                    "Rechazo seguro", "transferir dinero", "revelar"):
         assert phrase not in prompt
-    assert SECURITY_SCOPE_ID == "SECURITY_SCOPE_v2"
+    assert SECURITY_SCOPE_ID == "SECURITY_SCOPE_v3"
 
 
 def test_judge_input_carries_only_the_extracted_data_and_neutralizes_the_delimiters():
@@ -197,7 +197,7 @@ def test_judge_request_is_independent_structured_temperature_zero_and_scoped():
     (call,) = client.models.calls
     config = call["config"]
     assert config.system_instruction == f"{ACTIVE_SECURITY_SCOPE}\n{PROMPTS[JUDGE_PROMPT_ID]}"
-    assert config.system_instruction.startswith(SECURITY_SCOPE_v2)
+    assert config.system_instruction.startswith(SECURITY_SCOPE_v3)
     assert config.temperature == JUDGE_TEMPERATURE == 0.0
     assert config.response_json_schema == JUDGE_JSON_SCHEMA and not config.tools
     # Solo la imagen y los datos extraídos: dos elementos, ninguno es historial ni mensaje del agente.
@@ -467,7 +467,7 @@ def test_every_llm_call_of_the_judge_flow_carries_the_baseline_scope_and_the_ver
     scopes = {e.data.get("security_scope_id") for e in h.last_events
               if e.event_type == EventType.LLM_DECISION}
     assert scopes == {SECURITY_SCOPE_ID}
-    assert all(c["config"].system_instruction.startswith(SECURITY_SCOPE_v2) for c in h.client.models.calls)
+    assert all(c["config"].system_instruction.startswith(SECURITY_SCOPE_v3) for c in h.client.models.calls)
     assert len(h.events(EventType.JUDGE_VERDICT)) == 1
 
 

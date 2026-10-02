@@ -7,7 +7,7 @@ from app.agent import ExpenseAgent
 from app.conversation import Conversation
 from app.llm import LLMClient
 from app.models import DriveResult, EventType, ReceiptData, SheetResult
-from app.prompts import SECURITY_SCOPE_v2
+from app.prompts import SECURITY_SCOPE_v3
 from app.trace import Tracer
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -168,7 +168,7 @@ def test_system_instruction_is_sent_each_call_but_not_stored_in_history():
     agent.run("Registra este recibo", IMAGE, conversation=conversation)
 
     for call in client.models.calls:
-        assert call["config"].system_instruction.startswith(SECURITY_SCOPE_v2)
+        assert call["config"].system_instruction.startswith(SECURITY_SCOPE_v3)
     assert {c.role for c in conversation.contents} <= {"user", "model"}
     assert "SECURITY_SCOPE" not in texts(conversation.contents)
 

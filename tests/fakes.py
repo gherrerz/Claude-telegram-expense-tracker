@@ -195,3 +195,193 @@ class ScriptedClient:
     def __init__(self, script, repeat=None):
         self.models = ScriptedModels(script)
         self.models.repeat = repeat
+
+
+# -- Etapa 15: embeddings y Redis falsos (sin red) ---------------------------------------
+import hashlib  # noqa: E402
+import re as _re  # noqa: E402
+import unicodedata  # noqa: E402
+
+import numpy as np  # noqa: E402
+from redis.exceptions import ResponseError  # noqa: E402
+
+EMBED_DIMS = 768
+# Palabras de las plantillas de embeddings: no aportan significado al parecido.
+_TEMPLATE_WORDS = {"title", "text", "task", "search", "result", "query", "none"}
+
+
+def _words(text):
+    plain = unicodedata.normalize("NFD", text.lower())
+    plain = "".join(c for c in plain if unicodedata.category(c) != "Mn")
+    return [w[:6] for w in _re.findall(r"[a-z]{4,}", plain) if w not in _TEMPLATE_WORDS]
+
+
+def hash_embedding(text):
+    """Vector normalizado de 768 dimensiones: bolsa de palabras (raíz de 6 letras) con hash.
+
+    Dos textos que comparten palabras tienen coseno alto; sin palabras en común, coseno ~0.
+    """
+    vector = np.zeros(EMBED_DIMS, dtype=np.float64)
+    for word in _words(text):
+        index = int(hashlib.md5(word.encode()).hexdigest(), 16) % EMBED_DIMS
+        vector[index] += 1.0
+    norm = np.linalg.norm(vector)
+    if norm == 0:
+        vector[0] = 1.0
+        norm = 1.0
+    return (vector / norm).tolist()
+
+
+class FakeEmbedder:
+    """Sustituto directo de `LLMClient.embed` para las pruebas del recuperador y del indexador."""
+
+    def __init__(self, fail_with=None):
+        self.calls = []  # [(textos, propósito)]
+        self.fail_with = fail_with
+
+    def embed(self, texts, purpose="documento"):
+        self.calls.append((list(texts), purpose))
+        if self.fail_with is not None:
+            raise self.fail_with
+        return [hash_embedding(t) for t in texts]
+
+
+class ScriptedEmbedModels(ScriptedModels):
+    """`ScriptedModels` con `embed_content`: un vector `hash_embedding` por `Content` recibido."""
+
+    def __init__(self, script, embed_script=()):
+        super().__init__(script)
+        self.embed_script = list(embed_script)  # errores o respuestas a consumir primero
+        self.embed_calls = []
+
+    def embed_content(self, *, model, contents, config):
+        self.embed_calls.append({"model": model, "contents": list(contents), "config": config})
+        if self.embed_script:
+            item = self.embed_script.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            return item
+        vectors = [
+            SimpleNamespace(values=hash_embedding("".join(p.text for p in c.parts)))
+            for c in contents
+        ]
+        return SimpleNamespace(embeddings=vectors)
+
+
+class RagClient:
+    """Cliente de Gemini falso con generación guionada y embeddings."""
+
+    def __init__(self, script, embed_script=()):
+        self.models = ScriptedEmbedModels(script, embed_script)
+
+
+class FakePipeline:
+    def __init__(self, redis):
+        self.redis = redis
+        self.ops = []
+
+    def hset(self, key, mapping):
+        self.ops.append((key, dict(mapping)))
+
+    def execute(self):
+        for key, mapping in self.ops:
+            self.redis.hashes[key] = mapping
+        self.ops = []
+
+
+class FakeSearch:
+    """Imita `client.ft(nombre)`: `info`, `create_index`, `dropindex` y `search` (KNN por coseno)."""
+
+    def __init__(self, redis, name):
+        self.redis = redis
+        self.name = name
+
+    def info(self):
+        self.redis.commands.append(("FT.INFO", self.name))
+        if self.name not in self.redis.indexes:
+            raise ResponseError("Unknown index name")
+        prefix = self.redis.indexes[self.name]["prefix"]
+        count = sum(1 for k in self.redis.hashes if k.startswith(prefix))
+        return {"index_name": self.name, "num_docs": str(count), "attributes": [["identifier", "embedding"]]}
+
+    def create_index(self, fields, definition=None):
+        self.redis.commands.append(("FT.CREATE", self.name))
+        assert self.name not in self.redis.indexes, "el índice ya existe"
+        args = list(definition.args)
+        prefix = args[args.index("PREFIX") + 2]
+        self.redis.indexes[self.name] = {
+            "prefix": prefix,
+            "on": args[args.index("ON") + 1],
+            "fields": [(f.name, [str(a) for a in f.args]) for f in fields],
+        }
+
+    def dropindex(self, delete_documents=False):
+        self.redis.commands.append(("FT.DROPINDEX", self.name, bool(delete_documents)))
+        if self.name not in self.redis.indexes:
+            raise ResponseError("Unknown index name")
+        prefix = self.redis.indexes.pop(self.name)["prefix"]
+        if delete_documents:
+            for key in [k for k in self.redis.hashes if k.startswith(prefix)]:
+                del self.redis.hashes[key]
+
+    def search(self, query, query_params=None):
+        self.redis.commands.append(("FT.SEARCH", self.name, query.query_string(), tuple(query.get_args())))
+        prefix = self.redis.indexes[self.name]["prefix"]
+        vec = np.frombuffer(query_params["vec"], dtype=np.float32)
+        docs = []
+        for key, mapping in self.redis.hashes.items():
+            if not key.startswith(prefix):
+                continue
+            stored = np.frombuffer(mapping["embedding"], dtype=np.float32)
+            distance = 1.0 - float(np.dot(vec, stored) / (np.linalg.norm(vec) * np.linalg.norm(stored)))
+            docs.append(SimpleNamespace(id=key, score=str(distance), **{
+                k: v for k, v in mapping.items() if k != "embedding"}))
+        docs.sort(key=lambda d: float(d.score))
+        k = query_params["k"]
+        return SimpleNamespace(total=len(docs), docs=docs[:k])
+
+
+class FakeRedis:
+    """Redis en memoria con lo mínimo que usa `RedisVectorStore` (y registro de comandos)."""
+
+    def __init__(self, fail_with=None):
+        self.hashes = {}
+        self.strings = {}
+        self.indexes = {}
+        self.commands = []
+        self.deleted = []
+        self.fail_with = fail_with
+
+    def _maybe_fail(self):
+        if self.fail_with is not None:
+            raise self.fail_with
+
+    def ft(self, name):
+        self._maybe_fail()
+        return FakeSearch(self, name)
+
+    def pipeline(self, transaction=True):
+        return FakePipeline(self)
+
+    def scan_iter(self, match=None, count=None):
+        import fnmatch
+
+        self.commands.append(("SCAN", match))
+        for key in list(self.hashes) + list(self.strings):
+            if match is None or fnmatch.fnmatchcase(key, match):
+                yield key.encode()
+
+    def delete(self, *keys):
+        for key in keys:
+            name = key.decode() if isinstance(key, bytes) else key
+            self.deleted.append(name)
+            self.hashes.pop(name, None)
+            self.strings.pop(name, None)
+
+    def get(self, key):
+        self._maybe_fail()
+        value = self.strings.get(key)
+        return value.encode() if isinstance(value, str) else value
+
+    def set(self, key, value):
+        self.strings[key] = value
