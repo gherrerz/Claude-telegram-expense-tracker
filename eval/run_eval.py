@@ -14,13 +14,18 @@ Qué hace
   duración y traza `traces/eval_<versión>_<caso>.jsonl`) queda en `eval/results_<versión>.json`.
 
 Etiquetas de versión (no se confunden)
-- La versión del GOLDEN SET (`version` del JSON, hoy v1) solo cambia si se AGREGAN casos; nunca se
-  quitan ni se editan para que pasen.
+- La versión del GOLDEN SET (`version` del JSON, hoy v2 = los 13 casos de v1 + 4 del RAG) solo cambia si
+  se AGREGAN casos; nunca se quitan ni se editan para que pasen.
 - La versión del SISTEMA (`--system-version`) etiqueta el código bajo prueba: `results_v1.json` es la
   primera corrida; cada corrección del sistema por un fallo genera `results_v2.json`, etc.
 
 Estados por caso: APROBADO, FALLIDO, ERROR (excepción del arnés), PENDIENTE (no hubo veredicto: cuota
-agotada o API caída, falta de configuración de Google, o no se ejecutó) y OMITIDO (`--no-google`).
+agotada o API caída, falta de configuración de Google o del Redis del curso, o no se ejecutó) y OMITIDO
+(`--no-google` para los casos `google: true`, `--no-rag` para los `rag: true`).
+
+Casos del RAG (Etapa 15). Un caso con `rag: true` necesita el Redis del curso (`REDIS_URL` y
+`REDIS_PREFIX`) con el índice cargado (`scripts/load_corpus.py`); sin esa configuración queda PENDIENTE.
+La evidencia de cada turno incluye los eventos RETRIEVAL y las llamadas de embeddings.
 
 Interrupción. Si un caso agota la cuota (429 / RESOURCE_EXHAUSTED tras los reintentos) o la API no responde
 (503 / UNAVAILABLE), el caso queda PENDIENTE (no FALLIDO), la corrida se detiene y se escribe el archivo con
@@ -32,8 +37,8 @@ Códigos de salida: 0 todo aprobado; 1 hay casos FALLIDO o ERROR; 2 falta config
 entrada es inválida; 3 corrida incompleta (interrumpida, o con casos PENDIENTE u OMITIDO).
 
 Uso:
-    .venv\\Scripts\\python eval\\run_eval.py --system-version v1 --out eval\\results_v1.json
-    .venv\\Scripts\\python eval\\run_eval.py --system-version v1 --out eval\\results_v1.json --resume
+    .venv\\Scripts\\python eval\\run_eval.py --system-version v2 --out eval\\results_v2.json
+    .venv\\Scripts\\python eval\\run_eval.py --system-version v2 --out eval\\results_v2.json --resume
 """
 from __future__ import annotations
 
@@ -65,7 +70,7 @@ from app.prompts import SECURITY_SCOPE_ID  # noqa: E402
 from app.trace import Tracer, mask_value  # noqa: E402
 from eval.criteria import evaluate_case, validate_golden_set  # noqa: E402
 
-DEFAULT_GOLDEN = ROOT / "eval" / "golden_set_v1.json"
+DEFAULT_GOLDEN = ROOT / "eval" / "golden_set_v2.json"
 TRACE_DIR = ROOT / "traces"
 EXPECTED_JSON = ROOT / "data" / "receipts" / "expected.json"
 
@@ -176,6 +181,8 @@ class RunContext:
     root: Path = ROOT
     google_ready: bool = False
     google_reason: str = ""
+    rag_ready: bool = True  # los casos `rag: true` necesitan el Redis del curso (REDIS_URL y REDIS_PREFIX)
+    rag_reason: str = ""
     sheet_rows: Optional[Callable[[], int]] = None
     assistant_factory: Optional[Callable[[dict[str, Callable[..., Any]], Tracer], Any]] = None
     now: Callable[[], datetime] = datetime.now
@@ -328,6 +335,12 @@ def _play_case(case: dict[str, Any], ctx: RunContext, tracer: Tracer, evidence: 
                 1 for e in events
                 if e.event_type == EventType.LLM_DECISION and e.data.get("kind") != "embedding"
             ),
+            # RAG (Etapa 15): eventos RETRIEVAL del turno y llamadas de embeddings.
+            "retrievals": [e.data for e in events if e.event_type == EventType.RETRIEVAL],
+            "embeddings": sum(
+                1 for e in events
+                if e.event_type == EventType.LLM_DECISION and e.data.get("kind") == "embedding"
+            ),
             "alcances": sorted({
                 e.data.get("security_scope_id") for e in events
                 if e.event_type == EventType.LLM_DECISION and e.data.get("security_scope_id")
@@ -356,6 +369,16 @@ def _turn_summary(turn: dict[str, Any]) -> dict[str, Any]:
         "filas_antes": turn.get("filas_antes"),
         "filas_despues": turn.get("filas_despues"),
         "llamadas_llm": turn["llamadas_llm"],
+        "embeddings": turn.get("embeddings", 0),
+        "recuperaciones": [
+            {
+                "decision": r.get("decision"),
+                "mejor_similitud": r.get("mejor_similitud"),
+                "umbral": r.get("umbral"),
+                "fuentes": [f"{x.get('fuente')} §{x.get('seccion')}" for x in r.get("resultados") or []],
+            }
+            for r in turn.get("retrievals") or []
+        ],
         "estado_memoria": {
             "nombre_usuario": state.get("nombre_usuario"),
             "totales_por_categoria": state.get("totales_por_categoria"),
@@ -371,6 +394,7 @@ def _empty_result(case: dict[str, Any], estado: str, motivo: Optional[str]) -> d
         "nombre": case["nombre"],
         "categoria": case["categoria"],
         "google": case["google"],
+        "rag": bool(case.get("rag", False)),
         "estado": estado,
         "motivo": motivo,
         "definicion_sha256": _definition_hash(case),
@@ -509,6 +533,7 @@ def execute_run(
     only: Optional[set[str]] = None,
     resume: bool = False,
     no_google: bool = False,
+    no_rag: bool = False,
     save: Optional[Callable[[dict[str, Any]], None]] = None,
     progress: Optional[Callable[[str], None]] = None,
 ) -> dict[str, Any]:
@@ -554,6 +579,12 @@ def execute_run(
         elif case["google"] and not ctx.google_ready:
             results[cid] = _empty_result(case, PENDIENTE, f"falta configuración de Google: {ctx.google_reason}")
             say(f"[{cid}] PENDIENTE (falta configuración de Google)")
+        elif case.get("rag") and no_rag:
+            results[cid] = _empty_result(case, OMITIDO, "omitido por --no-rag")
+            say(f"[{cid}] OMITIDO (--no-rag)")
+        elif case.get("rag") and not ctx.rag_ready:
+            results[cid] = _empty_result(case, PENDIENTE, f"falta configuración del Redis del curso: {ctx.rag_reason}")
+            say(f"[{cid}] PENDIENTE (falta configuración del Redis del curso)")
         else:
             say(f"[{cid}] ejecutando: {case['nombre']}")
             result = run_case(case, ctx)
@@ -646,6 +677,14 @@ def prepare_google(status: dict[str, str]) -> tuple[bool, str, Optional[Callable
     return True, "", lambda: get_sheet_snapshot(sheets, settings)["row_count"]
 
 
+def prepare_rag(status: dict[str, str]) -> tuple[bool, str]:
+    """`(lista, motivo)`: solo presencia de `REDIS_URL` y `REDIS_PREFIX`, nunca valores ni red."""
+    missing = [f"falta {name}" for name in ("REDIS_URL", "REDIS_PREFIX") if status.get(name) == "falta"]
+    if missing:
+        return False, "; ".join(missing) + " (docs/setup_redis.md)"
+    return True, ""
+
+
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=(__doc__ or "").strip().splitlines()[0])
     parser.add_argument("--golden", type=Path, default=DEFAULT_GOLDEN, help="golden set JSON")
@@ -656,6 +695,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--only", default=None, help="ids separados por coma (p. ej. GS01,GS08A)")
     parser.add_argument("--no-google", action="store_true",
                         help="omite los casos con Google (quedan OMITIDO: la corrida no queda completa)")
+    parser.add_argument("--no-rag", action="store_true",
+                        help="omite los casos con RAG (quedan OMITIDO: la corrida no queda completa)")
     return parser.parse_args(argv)
 
 
@@ -727,6 +768,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         google_ready, google_reason, sheet_rows = prepare_google(status)
         if not google_ready:
             print(f"AVISO: los casos con Google quedarán PENDIENTE ({google_reason}).")
+    rag_ready, rag_reason = True, ""
+    if any(c.get("rag") for c in todo) and not args.no_rag:
+        rag_ready, rag_reason = prepare_rag(status)
+        if not rag_ready:
+            print(f"AVISO: los casos con RAG quedarán PENDIENTE ({rag_reason}).")
     try:
         expected_json = json.loads(EXPECTED_JSON.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
@@ -739,11 +785,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         ctx = RunContext(
             llm=llm, system_version=args.system_version, run_id=datetime.now().strftime("%H%M%S"),
             tmp_dir=Path(tmp), google_ready=google_ready, google_reason=google_reason,
+            rag_ready=rag_ready, rag_reason=rag_reason,
             sheet_rows=sheet_rows, expected_json=expected_json,
         )
         doc = execute_run(
             golden, ctx, existing=existing, only=only, resume=args.resume, no_google=args.no_google,
-            save=lambda d: write_results(d, out), progress=print,
+            no_rag=args.no_rag, save=lambda d: write_results(d, out), progress=print,
         )
     write_results(doc, out)
     print("\n" + format_report(doc))

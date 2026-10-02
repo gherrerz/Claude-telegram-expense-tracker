@@ -18,8 +18,10 @@ Proyecto académico: tarea final del curso de agentes de IA. La entrega evaluada
 - [Arquitectura de la solución implementada (diagramas)](docs/solution_architecture.md)
 - [Acceso al LLM: clave gratuita de Google AI Studio y límites](docs/setup_llm.md)
 - [Configuración de Google Drive y Sheets](docs/setup_google.md)
+- [Configuración del Redis del curso (RAG, Etapa 15)](docs/setup_redis.md)
 - [Ampliaciones declaradas (bonos)](docs/bonos.md)
 - [Evaluación con golden set e historial de corridas](docs/evaluation.md)
+- [Corpus sintético del RAG y su origen](data/corpus/README.md)
 - [Checklist final contra la rúbrica](docs/checklist_rubrica.md)
 - [Ejemplos de trazas reales](docs/trace_examples.md)
 - [Mapa frente a la materia del curso](docs/mapa_curso.md)
@@ -41,7 +43,7 @@ Esta ficha reúne lo que otra persona necesita para repetir la ejecución: model
 | ID exacto del modelo | `gemini-3.5-flash-lite`, confirmado por el autor el 2026-09-30. El código no lo escribe: lo lee de `LLM_MODEL`, y la celda siguiente imprime el valor configurado |
 | Fuentes del modelo | <https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite> y <https://ai.google.dev/gemini-api/docs/pricing> |
 | Un solo modelo | Todas las llamadas usan el mismo ID. El juez es una llamada aparte con prompt propio, no un modelo distinto |
-| Bloque de alcance | `SECURITY_SCOPE_v2` se antepone a la instrucción de sistema de cada llamada (garantía estructural en `LLMClient._generate`, `app/llm.py`) |
+| Bloque de alcance | `SECURITY_SCOPE_v3` se antepone a la instrucción de sistema de cada llamada de generación (garantía estructural en `LLMClient._generate`, `app/llm.py`); los embeddings no lo llevan porque no deciden ni redactan nada |
 | Pausa y reintentos | `LLM_MIN_SECONDS_BETWEEN_CALLS` (4,0 s por defecto) y hasta `LLM_MAX_RETRIES` (5 por defecto) reintentos con espera exponencial (2 s, 4 s, hasta 60 s) ante 429 y 503; cada reintento queda como evento `RETRY` |
 
 Parámetros de cada tipo de llamada (todos desde constantes de `app/llm.py`):
@@ -50,14 +52,25 @@ Parámetros de cada tipo de llamada (todos desde constantes de `app/llm.py`):
 |---|---|---|---|
 | Extracción del recibo (`analizar_recibo`) | `ANALYZER_PROMPT_v1` | `EXTRACTION_TEMPERATURE` = 0,0 | JSON con esquema (`response_json_schema`) |
 | Agente ReAct | `AGENT_PROMPT_v3` | `AGENT_TEMPERATURE` = 0,0 | *Function calling* nativo en modo `AUTO`; ejecución automática del SDK desactivada |
-| Router | `ROUTER_PROMPT_v2` | `ROUTER_TEMPERATURE` = 0,0 | JSON con esquema; la ruta es un enum de cuatro etiquetas |
+| Router | `ROUTER_PROMPT_v3` | `ROUTER_TEMPERATURE` = 0,0 | JSON con esquema; la ruta es un enum de cinco etiquetas |
 | Juez | `JUDGE_PROMPT_v1` | `JUDGE_TEMPERATURE` = 0,0 | JSON con esquema `{veredicto, motivo, senales}` |
 | Respuesta de conversación | `CHAT_PROMPT_v2` | `ANSWER_TEMPERATURE` = 0,0 | JSON con esquema `{respuesta, nombre_usuario}` |
 | Respuesta de consulta de gastos | `QUERY_PROMPT_v2` | `ANSWER_TEMPERATURE` = 0,0 | Texto libre |
+| Respuesta de política (RAG) | `RAG_PROMPT_v1` | `ANSWER_TEMPERATURE` = 0,0 | Texto libre con citas `[archivo §sección]`; los fragmentos van como dato |
 
 No se fijan `thinking_level`, `top_p`, `top_k` ni el máximo de tokens de salida: rige el valor por defecto del modelo. Google recomienda una temperatura de 1,0 en Gemini 3 (<https://ai.google.dev/gemini-api/docs/gemini-3>); se usa 0,0 por reproducibilidad y la verificación real de la Etapa 3 lo confirmó (las extracciones con 0,0 coinciden con las de 1,0, sin bucles; ver `docs/dev_prompts.md`).
 
-Prompts en uso, todos en `app/prompts.py` y registrados en `PROMPTS`: `SECURITY_SCOPE_v2` (en todas las llamadas), `ANALYZER_PROMPT_v1`, `AGENT_PROMPT_v3`, `ROUTER_PROMPT_v2`, `CHAT_PROMPT_v2`, `QUERY_PROMPT_v2` y `JUDGE_PROMPT_v1`. Se conservan por trazabilidad, sin uso en el flujo vigente: `SECURITY_SCOPE_v1`, `AGENT_PROMPT_v1` y `v2`, `ROUTER_PROMPT_v1`, `CHAT_PROMPT_v1` y `QUERY_PROMPT_v1`. `SMOKE_PROMPT_v1` solo lo usa la prueba de humo de `scripts/verify_stage_3.py`.
+Prompts en uso, todos en `app/prompts.py` y registrados en `PROMPTS`: `SECURITY_SCOPE_v3` (en todas las llamadas de generación), `ANALYZER_PROMPT_v1`, `AGENT_PROMPT_v3`, `ROUTER_PROMPT_v3`, `CHAT_PROMPT_v2`, `QUERY_PROMPT_v2`, `RAG_PROMPT_v1` y `JUDGE_PROMPT_v1`. Se conservan por trazabilidad, sin uso en el flujo vigente: `SECURITY_SCOPE_v1` y `v2`, `AGENT_PROMPT_v1` y `v2`, `ROUTER_PROMPT_v1` y `v2`, `CHAT_PROMPT_v1` y `QUERY_PROMPT_v1`. `SMOKE_PROMPT_v1` solo lo usa la prueba de humo de `scripts/verify_stage_3.py`.
+
+#### Embeddings y RAG (Etapa 15)
+
+| Campo | Valor |
+|---|---|
+| Modelo de embeddings | `gemini-embedding-2` (ID estable, capa gratuita), con `output_dimensionality=768`; los vectores salen normalizados. No admite `task_type`: la tarea va en el texto (documentos `title: … \| text: …`, consultas `task: search result \| query: …`). Las constantes están en `app/config.py` (`EMBEDDING_MODEL`, `EMBEDDING_DIMS`) |
+| Almacén | El Redis del curso (compartido; RediSearch), solo para el RAG y bajo el prefijo del grupo `REDIS_PREFIX`. La URL (con contraseña) va solo en `.env` como `REDIS_URL`. Pasos en `docs/setup_redis.md` |
+| Índice | `{REDIS_PREFIX}:rag:idx` sobre HASH `{REDIS_PREFIX}:rag:chunk:*`; campos `chunk_id` y `fuente` (TAG), `seccion` y `texto` (TEXT) y `embedding` (VECTOR HNSW, FLOAT32, 768 dimensiones, COSINE) |
+| Recuperación | `RAG_TOP_K` fragmentos (3 por defecto) y umbral `RAG_THRESHOLD` (0,75 por defecto, calibrado con `scripts/calibrate_rag_threshold.py`: peor acierto 0,7929 frente a mejor fallo 0,6988). Bajo el umbral el asistente se abstiene sin llamar al LLM de generación |
+| Origen del corpus | `data/corpus/`: la política de rendición de gastos de una empresa **ficticia** («Consultora Andes Ficticia»), escrita para este proyecto; sintético, sin datos reales ni material de terceros (`data/corpus/README.md`). 3 documentos, 29 fragmentos (500 caracteres, solape 100) |
 
 ### 2. Modelo de desarrollo (declarado aparte)
 
@@ -72,7 +85,7 @@ py -3.12 -m venv .venv
 .venv\Scripts\python -m pip install -r requirements.txt
 ```
 
-Incluye el SDK de Gemini (`google-genai`), las bibliotecas de Google Drive y Sheets, `pydantic`, `python-dotenv`, `Pillow` (solo para generar los recibos sintéticos; no es OCR), `nbformat`, `nbconvert` e `ipykernel` (notebook), `pytest` y `python-telegram-bot` (solo la demo de Telegram).
+Incluye el SDK de Gemini (`google-genai`), el cliente de Redis (`redis`) y `numpy` (solo el RAG), las bibliotecas de Google Drive y Sheets, `pydantic`, `python-dotenv`, `Pillow` (solo para generar los recibos sintéticos; no es OCR), `nbformat`, `nbconvert` e `ipykernel` (notebook), `pytest` y `python-telegram-bot` (solo la demo de Telegram).
 
 ### 4. Variables de entorno (nombres y función, sin valores)
 
@@ -80,7 +93,7 @@ Se copian de `.env.example` a `.env`, que está en `.gitignore`. El notebook sol
 
 | Variable | Función | Se necesita para |
 |---|---|---|
-| `GEMINI_API_KEY` | Clave gratuita de Google AI Studio (secreta). Pasos en `docs/setup_llm.md` | Las celdas con LLM de las Secciones 2 a 7, 9 y 10 |
+| `GEMINI_API_KEY` | Clave gratuita de Google AI Studio (secreta). Pasos en `docs/setup_llm.md` | Las celdas con LLM de las Secciones 2 a 7, 9, 10 y 11 |
 | `LLM_MODEL` | ID del modelo (`gemini-3.5-flash-lite`) | Igual que la anterior |
 | `LLM_MAX_RETRIES` | Reintentos ante 429 y 503 (opcional, 5 por defecto) | Opcional |
 | `LLM_MIN_SECONDS_BETWEEN_CALLS` | Pausa mínima entre llamadas (opcional, 4,0 por defecto) | Opcional |
@@ -88,17 +101,21 @@ Se copian de `.env.example` a `.env`, que está en `.gitignore`. El notebook sol
 | `GOOGLE_OAUTH_TOKEN` | Ruta del token OAuth (opcional; por defecto `secrets/token.json`) | Drive y Sheets |
 | `DRIVE_FOLDER_ID` | Carpeta de prueba de Drive | Drive |
 | `SHEET_ID` | Planilla de prueba de Sheets | Sheets |
+| `REDIS_URL` | URL de conexión del Redis del curso, que entrega el docente e incluye la contraseña (secreta; solo en `.env`) | La ruta de política (RAG): Sección 11 y los casos `rag: true` del golden set |
+| `REDIS_PREFIX` | Prefijo de grupo bajo el que vive todo el RAG (letras, números, guion y guion bajo) | Igual que la anterior |
+| `RAG_TOP_K`, `RAG_THRESHOLD` | Fragmentos recuperados (3 por defecto) y umbral de similitud (0,75 por defecto); opcionales y no hace falta declararlos | Opcional |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_CHAT_IDS` | Token y lista de chats de la demo de Telegram | Solo la demo (`docs/setup_telegram.md`); el notebook no las usa |
 
 ### 5. Datos de prueba
 
-`data/receipts/` contiene recibos **sintéticos**: `receipt_normal.jpg`, `receipt_hard.jpg`, `receipt_illegible.jpg` y `receipt_injection.jpg`, dibujados con `scripts/generate_receipts.py` (Pillow, semilla fija, comercios ficticios) y sin datos personales. `data/receipts/expected.json` declara los valores esperados por archivo. Los casos con Google generan en tiempo de ejecución un recibo único (`generate_unique_receipt`, comercio ficticio con sufijo de corrida) para no chocar con la deduplicación de la planilla. El golden set es `eval/golden_set_v1.json` y su corrida real está en `eval/results_v1.json`. En la capa gratuita Google puede usar los datos enviados para mejorar sus productos, por eso solo se envían recibos sintéticos (ver `docs/setup_llm.md`).
+`data/receipts/` contiene recibos **sintéticos**: `receipt_normal.jpg`, `receipt_hard.jpg`, `receipt_illegible.jpg` y `receipt_injection.jpg`, dibujados con `scripts/generate_receipts.py` (Pillow, semilla fija, comercios ficticios) y sin datos personales. `data/receipts/expected.json` declara los valores esperados por archivo. Los casos con Google generan en tiempo de ejecución un recibo único (`generate_unique_receipt`, comercio ficticio con sufijo de corrida) para no chocar con la deduplicación de la planilla. El golden set vigente es `eval/golden_set_v2.json` (los 13 casos de v1 más 4 del RAG); `eval/golden_set_v1.json` y su corrida real `eval/results_v1.json` se conservan. `data/corpus/` contiene el corpus **sintético** del RAG (una empresa ficticia, sin datos reales). En la capa gratuita Google puede usar los datos enviados para mejorar sus productos, por eso solo se envían recibos sintéticos (ver `docs/setup_llm.md`).
 
 ### 6. Cómo ejecutar
 
 1. Instalar las dependencias (punto 3) y abrir `notebooks/demo.ipynb` con el kernel de `.venv` (*Run All*), o ejecutarlo desde la terminal: `.venv\Scripts\python -m jupyter nbconvert --to notebook --execute notebooks/demo.ipynb --output-dir <carpeta de salida>`. Hay que ejecutar las celdas en orden y desde cero.
 2. Crear `.env` con `GEMINI_API_KEY` y `LLM_MODEL` (`docs/setup_llm.md`). Es lo único obligatorio para el flujo central.
 3. Opcional: configurar Google (`docs/setup_google.md`) para que el agente guarde de verdad en Drive y Sheets.
+4. Opcional: configurar el RAG (`docs/setup_redis.md`): definir `REDIS_URL` y `REDIS_PREFIX` en `.env` y **cargar el corpus antes de la Sección 11** con `.venv\Scripts\python scripts\load_corpus.py` (`--dry-run` solo fragmenta y muestra la firma; `--force` reconstruye solo el índice propio; si el corpus no cambió, la carga se omite).
 
 Qué hace cada sección según lo que esté configurado:
 
@@ -109,6 +126,9 @@ Qué hace cada sección según lo que esté configurado:
 | 3 | Omite la celda del agente | El agente corre en modo degradado | Registra de verdad en Drive y Sheets |
 | 7, 8, 9 | Corren las celdas sin red (estado, validación, veredictos fijos) y omiten las reales | Igual | Ejecutan además el ciclo real (escriben en la carpeta y la planilla de prueba) |
 | 10 | Valida el golden set y muestra `eval/results_v1.json` | Igual | Igual (`RUN_EVAL = False` por defecto) |
+| 11 (RAG) | Corre sin red el corpus, la fragmentación y las plantillas; omite la parte real | Igual (la parte real necesita además `REDIS_URL`, `REDIS_PREFIX` y el índice cargado) | Con Gemini y el Redis del curso: configuración real del índice y tres entradas (con recuperación, sin recuperar y fuera del corpus) |
+
+**Sin Redis.** Solo se degrada el RAG: la ruta de política responde con honestidad que la base de conocimiento no está disponible (`rag_no_disponible`) y nada se simula; registrar recibos, consultar gastos y conversar siguen funcionando.
 
 **Modo degradado (decisión A12).** Con solo la clave de Gemini el flujo central funciona: `analizar_recibo` corre de verdad y, si faltan la configuración o el token de Google, `guardar_recibo` y `registrar_gasto` devuelven un error estructurado que vuelve al LLM como observación; el agente responde con honestidad y nunca se simula un éxito de Drive o Sheets. Sin clave de Gemini las celdas con LLM se omiten con el aviso `omitido: …` y el notebook termina igual.
 
@@ -158,7 +178,9 @@ Regenerar los recibos sintéticos: `.venv\Scripts\python scripts\generate_receip
 .venv\Scripts\python eval\run_eval.py --system-version v1 --out eval\results_v1.json --resume
 ```
 
-La corrida v1 pasó 13 de 13 casos (100 %), con 65 llamadas al LLM y 119.912 tokens, sin interrupciones. Detalle, criterios y política de versionado en `docs/evaluation.md` y en `eval/results_v1.json`. La Sección 10 del notebook valida el golden set y muestra ese resultado; no vuelve a ejecutarlo salvo que se cambie `RUN_EVAL` a `True`.
+Desde la Etapa 15 el golden set por defecto es el **v2** (`eval/golden_set_v2.json`), que agrega 4 casos del RAG (GS11 a GS14, `rag: true`, necesitan el Redis del curso): `.venv\Scripts\python eval\run_eval.py --system-version v2 --out eval\results_v2.json`. Sin `REDIS_URL` y `REDIS_PREFIX` esos casos quedan `PENDIENTE` y con `--no-rag` quedan `OMITIDO`.
+
+La corrida v1 pasó 13 de 13 casos (100 %), con 65 llamadas al LLM y 119.912 tokens, sin interrupciones. **La corrida del golden set v2 (17 casos) sobre el sistema con RAG está pendiente** y no se cita como resultado. Detalle, criterios y política de versionado en `docs/evaluation.md` y en `eval/results_v1.json`. La Sección 10 del notebook valida el golden set y muestra ese resultado; no vuelve a ejecutarlo salvo que se cambie `RUN_EVAL` a `True`.
 
 ## Demo de Telegram (Etapa 13)
 
@@ -205,6 +227,7 @@ Resultado frente al consumo (observado el 2026-10-01): en la misma jornada se ej
 | 12 | Golden set | Completada (v1: 13/13) |
 | 13 | Demo Telegram | Implementada — prueba manual pendiente (decisión del autor) |
 | 14 | Notebook final y entrega | Completada; pendientes del autor: límites en AI Studio y la línea de `.env.example` |
+| 15 | RAG con el Redis del curso (bono +1,0) | Completada (RAG verificado en real el 2026-10-02: `verify_stage_15.py` OK y `pytest -m live` 4 passed); golden set v2 pendiente de corrida |
 
 ## Entregables
 
@@ -221,4 +244,5 @@ Entrega mínima del prompt maestro (Etapa 14) y el archivo que la cubre:
 | Ficha de reproducción | Este README y la Sección 0 del notebook |
 | Acceso al LLM | `docs/setup_llm.md` |
 | Checklist de la rúbrica | `docs/checklist_rubrica.md` |
-| Resultados del golden set | `eval/golden_set_v1.json`, `eval/results_v1.json` y `docs/evaluation.md` |
+| Resultados del golden set | `eval/golden_set_v1.json` y `eval/results_v1.json` (corrida real v1), `eval/golden_set_v2.json` (vigente; corrida pendiente) y `docs/evaluation.md` |
+| Configuración del Redis del curso y corpus del RAG | `docs/setup_redis.md` y `data/corpus/` |
