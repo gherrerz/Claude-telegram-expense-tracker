@@ -20,7 +20,7 @@
 - [x] T4 Ruta `CONSULTAR_POLITICA` (`ROUTER_PROMPT_v3`), `RAG_PROMPT_v1` y `SECURITY_SCOPE_v3`; degradación honesta sin Redis.
 - [x] T5 Pruebas offline, `live` y `scripts/verify_stage_15.py`; Sección 11 del notebook.
 - [x] T6a Golden set v2 (solo agrega casos): `eval/golden_set_v2.json`, criterios nuevos, campo `rag`, `--no-rag` y pruebas offline (arnés listo).
-- [ ] T6b Corrida real del golden set v2 (`eval/results_v2.json`, 17 casos): **pendiente del orquestador**; la fila v2 de `docs/evaluation.md` dice «pendiente de corrida».
+- [x] T6b Corrida real del golden set v2 (2026-10-02): 17/17 APROBADO (100%), 71 llamadas LLM, 139.419 tokens, sin interrupción (`eval/results_v2.json`).
 - [x] T7 Documentación: `architecture.md` §11, `solution_architecture.md`, `bonos.md`, checklist, README, `setup_redis.md` y bitácora.
 
 ## Evidencia

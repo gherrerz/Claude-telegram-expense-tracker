@@ -152,7 +152,7 @@ Se completa con corridas reales (`eval/results_vN.json`); no se inventan resulta
 | Versión del sistema | Fecha | Golden set | Aprobados / casos | Fallidos | Pendientes | Llamadas LLM | Interrumpida | Cambio que motivó la versión | Archivo |
 |---|---|---|---|---|---|---|---|---|---|
 | v1 | 2026-10-01 (12:53–13:08, -03:00) | v1 (sha256 `798987dc…`) | 13 / 13 | 0 | 0 | 65 (119.912 tokens) | no | Primera corrida del sistema completo (Etapas 3–11) | `eval/results_v1.json` |
-| v2 | pendiente de corrida | v2 (17 casos) | pendiente de corrida | pendiente de corrida | pendiente de corrida | pendiente de corrida | pendiente de corrida | Sistema con RAG (Etapa 15: ruta `CONSULTAR_POLITICA`, `SECURITY_SCOPE_v3`) y golden set v2 (v1 más GS11 a GS14) | `eval/results_v2.json` (se genera al ejecutar) |
+| v2 | 2026-10-02 (13:53–14:08, -03:00) | v2 (17 casos, sha256 `7a313ebb…`) | 17 / 17 | 0 | 0 | 71 (139.419 tokens) | no | Sistema con RAG (Etapa 15: ruta `CONSULTAR_POLITICA`, `SECURITY_SCOPE_v3`) y golden set v2 (v1 más GS11 a GS14) | `eval/results_v2.json` |
 
 **Nota sobre la corrida v1.** Pasó el 100% en la primera ejecución, así que no hubo fallos que corregir ni versiones siguientes. Los resultados se revisaron caso por caso y vienen de ejecuciones reales:
 - GS01 registró la fila 11 con veredicto del juez `APROBAR`.

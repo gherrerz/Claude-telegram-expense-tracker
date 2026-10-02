@@ -227,7 +227,7 @@ Resultado frente al consumo (observado el 2026-10-01): en la misma jornada se ej
 | 12 | Golden set | Completada (v1: 13/13) |
 | 13 | Demo Telegram | Implementada — prueba manual pendiente (decisión del autor) |
 | 14 | Notebook final y entrega | Completada; pendientes del autor: límites en AI Studio y la línea de `.env.example` |
-| 15 | RAG con el Redis del curso (bono +1,0) | Completada (RAG verificado en real el 2026-10-02: `verify_stage_15.py` OK y `pytest -m live` 4 passed); golden set v2 pendiente de corrida |
+| 15 | RAG con el Redis del curso (bono +1,0) | Completada (RAG verificado en real el 2026-10-02: `verify_stage_15.py` OK y `pytest -m live` 4 passed); golden set v2: 17/17 |
 
 ## Entregables
 
@@ -244,5 +244,5 @@ Entrega mínima del prompt maestro (Etapa 14) y el archivo que la cubre:
 | Ficha de reproducción | Este README y la Sección 0 del notebook |
 | Acceso al LLM | `docs/setup_llm.md` |
 | Checklist de la rúbrica | `docs/checklist_rubrica.md` |
-| Resultados del golden set | `eval/golden_set_v1.json` y `eval/results_v1.json` (corrida real v1), `eval/golden_set_v2.json` (vigente; corrida pendiente) y `docs/evaluation.md` |
+| Resultados del golden set | `eval/golden_set_v1.json` y `eval/results_v1.json` (corrida real v1), `eval/golden_set_v2.json` y `eval/results_v2.json` (vigente; corrida real v2: 17/17) y `docs/evaluation.md` |
 | Configuración del Redis del curso y corpus del RAG | `docs/setup_redis.md` y `data/corpus/` |
