@@ -283,6 +283,7 @@ La rúbrica pide adjuntar los prompts o instrucciones usados para desarrollar el
 - **Verificación real:** pendiente. El orquestador ejecuta el notebook completo con credenciales reales, mide las llamadas y completa «Consumo medido» en el README y el checklist.
 - **Ejecución real (2026-10-01):** `nbconvert --execute` de `notebooks/demo.ipynb` con Gemini, Drive y Sheets, en un kernel limpio, terminó con código de salida 0. Las 53 celdas corrieron sin errores y ninguna sección quedó «omitido»; el resultado es `notebooks/demo_executed.ipynb`, y se revisó que no contenga secretos.
   - Consumo: 73 llamadas LLM, 137.042 tokens y unos 24 min.
+  - **Reejecución con RAG (2026-10-02):** 56 celdas sin errores (incluida la Sección 11), 80 llamadas de generación sin fallas, 2 de embeddings, 6 reintentos, 163.016 tokens y unos 22 min. Esta copia reemplaza a `notebooks/demo_executed.ipynb` y se revisó sin secretos.
   - Hubo 42 reintentos, todos 503 `UNAVAILABLE`, y 2 llamadas fallaron tras agotarlos. El notebook las informó con honestidad y todas las comprobaciones de la rúbrica se cumplieron (por ejemplo, la Sección 4 confirma "Diego" con historial y su ausencia sin historial).
   - Ningún 429 por cuota. Las cifras se registraron en el README («Consumo medido») y en `docs/checklist_rubrica.md`.
 - **Pendientes del autor:** los límites que muestra AI Studio para su cuenta, la línea `TELEGRAM_ALLOWED_CHAT_IDS=` en `.env.example` y la prueba manual de Telegram.

@@ -199,7 +199,8 @@ Las llamadas se miden con los contadores del propio código (`LLMClient.stats` p
 | Ejecución | Llamadas LLM | Reintentos | Tokens | Duración | Fuente |
 |---|---|---|---|---|---|
 | Golden set v1 (13 casos, `eval/run_eval.py`) | 65 | 0 | 119.912 | 14 min 38 s (12:53:51 a 13:08:29, -03:00) | `eval/results_v1.json` (medido) |
-| Notebook completo (Secciones 0 a 10, `RUN_EVAL = False`), con Gemini y Google | 73 (2 fallidas tras agotar reintentos) | 42, todos 503 `UNAVAILABLE` (ningún 429) | 137.042 | ~24 min (1.450 s) | Celda «Resumen de consumo» de `notebooks/demo_executed.ipynb` (2026-10-01) |
+| Notebook completo (Secciones 0 a 11, `RUN_EVAL = False`), con Gemini, Google y el Redis del curso | 80 de generación (0 fallidas) + 2 de embeddings | 6 (ningún 429 por cuota) | 163.016 | ~22 min (1.332 s) | Celda «Resumen de consumo» de `notebooks/demo_executed.ipynb` (2026-10-02) |
+| Corrida anterior, sin RAG (Secciones 0 a 10) | 73 (2 fallidas tras agotar reintentos) | 42, todos 503 `UNAVAILABLE` | 137.042 | ~24 min (1.450 s) | 2026-10-01; reemplazada por la fila anterior |
 
 Referencia de las verificaciones reales anteriores, ya registradas en `docs/dev_prompts.md`: las celdas equivalentes del notebook consumieron 3 llamadas (Sección 2), 5 (Etapa 6, con Google), 9 (Etapa 7), 8 (Etapa 8), 10 (Etapa 9), 18 (Etapa 10) y 14 (Etapa 11), 67 en total. Las de las Etapas 6 a 10 se midieron antes de agregar el juez, que suma una llamada por cada análisis de recibo; por eso el total del notebook completo será mayor. **[SUPUESTO]** Es una referencia, no una medición del notebook final.
 
