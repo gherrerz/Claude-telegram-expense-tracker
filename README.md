@@ -226,7 +226,7 @@ Resultado frente al consumo (observado el 2026-10-01): en la misma jornada se ej
 | 10 | Memoria avanzada | Completada |
 | 11 | Juez LLM | Completada |
 | 12 | Golden set | Completada (v1: 13/13) |
-| 13 | Demo Telegram | Implementada — prueba manual pendiente (decisión del autor) |
+| 13 | Demo Telegram | Completada (prueba manual parcial del 2026-10-02; ver `docs/trace_examples.md` §8) |
 | 14 | Notebook final y entrega | Completada; pendientes del autor: límites en AI Studio y la línea de `.env.example` |
 | 15 | RAG con el Redis del curso (bono +1,0) | Completada (RAG verificado en real el 2026-10-02: `verify_stage_15.py` OK y `pytest -m live` 4 passed); golden set v2: 17/17 |
 

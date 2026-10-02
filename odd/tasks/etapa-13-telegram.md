@@ -17,7 +17,7 @@
 - [x] T2 `app/telegram_bot.py`: handlers de texto y foto, sesión por chat, descarga a un directorio temporal y respuesta.
 - [x] T3 Pruebas offline: el mismo `handle()`, el aislamiento por chat, la lista de acceso y que el token no aparezca en logs ni trazas.
 - [x] T4 `docs/setup_telegram.md` (BotFather) y bitácora.
-- [ ] T5 Prueba manual con la transcripción de la traza (requiere el token y un chat del autor).
+- [x] T5 Prueba manual (2026-10-02): 3 mensajes con el bot real (saludo, nombre en memoria y registro en la fila 25 con juez APROBAR); transcripción anonimizada en `docs/trace_examples.md` §8. Desviaciones: recibo real anonimizado, reinicios entre mensajes (sin continuidad de historial) y sin prueba del RAG ni de la consulta por Telegram.
 
 ## Evidencia
 - T1: `python-telegram-bot==22.8` fijado en `requirements.txt` e instalado; `TELEGRAM_ALLOWED_CHAT_IDS` en `app/config.py` (`ALL_VARIABLES`, `Settings`, `config_status`) y prueba en `tests/test_stage2_config.py`. Pendiente del autor: declarar la variable en `.env.example` (la prueba estricta falla hasta entonces).

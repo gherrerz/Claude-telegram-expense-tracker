@@ -264,7 +264,12 @@ La rúbrica pide adjuntar los prompts o instrucciones usados para desarrollar el
 - **Resultado:** `app/telegram_bot.py`, `TELEGRAM_ALLOWED_CHAT_IDS` en `app/config.py`, `tests/test_stage13_telegram.py`, `docs/setup_telegram.md` y fila 13 del README. Ver `odd/tasks/etapa-13-telegram.md`.
 - **Verificación:** pruebas offline sin red. La prueba manual con el token real y la transcripción de la traza están pendientes.
 - **Decisión del autor (2026-10-01, instrucción "saltemos la prueba manual de telegram, despues la realizo, ahora continua con la siguiente etapa"):** la prueba manual queda para más adelante. La demo no es evidencia evaluada.
-- **Estado:** IMPLEMENTADA — PRUEBA MANUAL PENDIENTE.
+- **Prueba manual (2026-10-02, instrucción "usa es prueba que realize"):**
+  - El autor ejecutó el bot real e hizo tres mensajes: un saludo, su nombre (`MEMORY_UPDATE set_user_name`) y la foto de un recibo. El recibo pasó por `analizar_recibo`, el juez dio `APROBAR`, se ejecutaron `guardar_recibo` y `registrar_gasto` (fila 25) y hubo `MEMORY_UPDATE record_expense`. Las 13 llamadas de generación llevan `SECURITY_SCOPE_v3`, sin reintentos ni secretos en la traza.
+  - La transcripción anonimizada está en `docs/trace_examples.md`, sección 8.
+  - **Desviaciones registradas:** se usó un recibo real, no sintético (se anonimizó en la documentación). El historial no se observa entre mensajes porque el bot se reinició entre ellos y hubo una instancia en paralelo. No se probaron la consulta desde la memoria ni el RAG por Telegram.
+  - Antes de la prueba hubo un `/start` sin respuesta. El diagnóstico, de solo lectura, fue que el proceso del bot no estaba corriendo: el token era válido, no había webhook y ninguna instancia escuchaba.
+- **Estado:** COMPLETADA (demo; prueba manual parcial con las desviaciones indicadas).
 
 ### Etapa 14 — Notebook final, entrega y revisión contra la rúbrica
 - **Fecha:** 2026-10-01

@@ -156,4 +156,18 @@ El mismo archivo contiene después las ejecuciones con `gemini-3.5-flash-lite` (
 
 ## 8. Traza de la demo de Telegram
 
-Pendiente: la prueba manual del bot con el token real queda para más adelante por decisión del autor (ver `docs/setup_telegram.md`). La demo no es evidencia evaluada.
+Prueba manual del autor, 2026-10-02, con el bot real (`python -m app.telegram_bot`), Gemini, Drive y Sheets. Fuente: `traces/telegram_<chat_id>.jsonl` (local, fuera de git). La demo no es evidencia evaluada.
+
+**Anonimización.** El autor fotografió un recibo **real** y no uno sintético de `data/receipts/`. Por eso se ocultan el comercio, la fecha y el monto, además del nombre del autor, el `chat_id` y el link de Drive. Hacerlo contradice la regla del proyecto de procesar solo recibos sintéticos (ver `data/README.md`), y queda registrado como desviación.
+
+| Hora (UTC) | Mensaje del usuario | Eventos de la traza | Respuesta del bot (resumida) |
+|---|---|---|---|
+| 18:26 | "Hola" | `ROUTE CONVERSACION` → `CHAT_PROMPT_v2` → `STOP ruta_conversacion` | Saluda y ofrece registrar recibos o responder sobre gastos y la política de rendición |
+| 18:34 | "Me llamo [nombre]" | `ROUTE CONVERSACION` → `MEMORY_UPDATE set_user_name` → `STOP ruta_conversacion` | "¡Hola [nombre]! …" |
+| 18:37 | Foto + "Registra este recibo" | `ROUTE REGISTRAR_RECIBO` → `TOOL_CALL analizar_recibo` (confianza 0.95, categoría Salud) → `JUDGE_VERDICT APROBAR` → `TOOL_CALL guardar_recibo` (ok) → `TOOL_CALL registrar_gasto` (fila 25) → `MEMORY_UPDATE record_expense` → `STOP respuesta_final` | "He registrado exitosamente tu gasto en la fila 25…", con comercio, fecha, monto, categoría Salud y link al comprobante (ocultos aquí) |
+
+Todas las llamadas de generación (13) registran `SECURITY_SCOPE_v3`, todas terminaron `ok` al primer intento y no hubo reintentos. La traza no contiene secretos: 0 coincidencias de token de bot, clave de Gemini, client secret OAuth o URL de Redis.
+
+**Limitaciones de esta prueba**
+- **El historial no se ve entre mensajes.** Los tres mensajes registran `turno=1` y `history_messages=0` porque se procesaron en procesos distintos del bot: el primero en una instancia que estaba corriendo en paralelo (el registro de esa instancia termina con `telegram.error.Conflict`) y los otros dos tras reiniciar el bot. La conversación y la memoria viven en el proceso, sin persistencia, así que cada reinicio parte de cero. La continuidad dentro de un mismo proceso la cubre `tests/test_stage13_telegram.py`.
+- **No se probaron** la consulta desde la memoria ("¿Cuánto llevo…?") ni el RAG por Telegram. Ambos caminos están verificados en real por fuera del bot (Etapas 10 y 15, y el golden set v2).
