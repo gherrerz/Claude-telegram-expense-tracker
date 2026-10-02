@@ -27,9 +27,10 @@ EMBEDDING_MODEL = "gemini-embedding-2"
 EMBEDDING_DIMS = 768
 DEFAULT_RAG_TOP_K = 3
 MAX_RAG_TOP_K = 10
-# PROVISIONAL hasta calibrar con `scripts/calibrate_rag_threshold.py` (Etapa 15): el valor de
-# partida es una estimación, no una medición. Se sobrescribe con `RAG_THRESHOLD`.
-DEFAULT_RAG_THRESHOLD = 0.60
+# Calibrado el 2026-10-02 con `scripts/calibrate_rag_threshold.py` contra el índice real: peor
+# acierto dentro del corpus 0.7929, mejor desacierto fuera del corpus 0.6988 (margen 0.0941).
+# 0.75 queda dentro del margen. Se puede sobrescribir con `RAG_THRESHOLD`.
+DEFAULT_RAG_THRESHOLD = 0.75
 # Prefijo de grupo en el Redis compartido: solo letras, números, guion y guion bajo. Excluye los
 # comodines de patrón (`*?[]`) y los dos puntos, así ningún prefijo puede alcanzar claves ajenas.
 REDIS_PREFIX_PATTERN = re.compile(r"^[A-Za-z0-9_\-]+$")
