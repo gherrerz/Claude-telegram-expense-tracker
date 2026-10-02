@@ -3,11 +3,13 @@
 Rutas (`ROUTES`):
 - `REGISTRAR_RECIBO`: loop ReAct con las tools de registro.
 - `CONSULTAR_GASTOS`: respuesta desde el `AgentState`, sin tools.
+- `CONSULTAR_POLITICA` (Etapa 15): respuesta con RAG sobre la política de rendición de gastos
+  (recupera fragmentos del Redis del curso solo en esta ruta), sin tools.
 - `CONVERSACION`: respuesta directa, sin tools.
 - `FUERA_DE_ALCANCE`: rechazo, sin tools.
 
 El router clasifica el FLUJO; no es un filtro de seguridad. El bloque de alcance
-(`SECURITY_SCOPE_v2`) y los rieles de código de las tools siguen activos en todas las rutas:
+(`SECURITY_SCOPE_v3`) y los rieles de código de las tools siguen activos en todas las rutas:
 una mala clasificación no abre ninguna acción prohibida.
 
 Salida estructurada: JSON `{ruta, motivo}` con `ruta` restringida a un enum. Se valida de nuevo
@@ -33,14 +35,17 @@ from app.llm import ROUTER_TEMPERATURE, LLMCallError, LLMClient
 from app.models import EventType
 from app.trace import Tracer
 
-ROUTER_PROMPT_ID = "ROUTER_PROMPT_v2"
+ROUTER_PROMPT_ID = "ROUTER_PROMPT_v3"
 SCHEMA_NAME = "RouteDecision"
 
 REGISTRAR_RECIBO = "REGISTRAR_RECIBO"
 CONSULTAR_GASTOS = "CONSULTAR_GASTOS"
+CONSULTAR_POLITICA = "CONSULTAR_POLITICA"
 CONVERSACION = "CONVERSACION"
 FUERA_DE_ALCANCE = "FUERA_DE_ALCANCE"
-ROUTES: tuple[str, ...] = (REGISTRAR_RECIBO, CONSULTAR_GASTOS, CONVERSACION, FUERA_DE_ALCANCE)
+ROUTES: tuple[str, ...] = (
+    REGISTRAR_RECIBO, CONSULTAR_GASTOS, CONSULTAR_POLITICA, CONVERSACION, FUERA_DE_ALCANCE,
+)
 
 MAX_ROUTER_TEXT_CHARS = 2000
 MAX_REASON_CHARS = 200
@@ -59,7 +64,10 @@ ROUTER_JSON_SCHEMA: dict[str, Any] = {
 class RouterOutput(BaseModel):
     """Salida esperada del LLM, validada con `Literal`."""
 
-    ruta: Literal["REGISTRAR_RECIBO", "CONSULTAR_GASTOS", "CONVERSACION", "FUERA_DE_ALCANCE"]
+    ruta: Literal[
+        "REGISTRAR_RECIBO", "CONSULTAR_GASTOS", "CONSULTAR_POLITICA", "CONVERSACION",
+        "FUERA_DE_ALCANCE",
+    ]
     motivo: str
 
 
@@ -108,7 +116,7 @@ def route_message(
         text: texto del usuario (puede ser vacío si hay imagen).
         has_image: si el mensaje trae una imagen adjunta (el router no la ve).
         recent_context: resumen breve de los últimos mensajes ("" si no hay).
-        llm: cliente LLM; toda la llamada lleva `SECURITY_SCOPE_v2` por construcción.
+        llm: cliente LLM; toda la llamada lleva `SECURITY_SCOPE_v3` por construcción.
         tracer: trazador del evento; por defecto el del cliente LLM.
         pending_confirmation: tipo de la confirmación pendiente del `AgentState` (Etapa 10) o
             `None`. Viaja como contexto al prompt; no hay ninguna regla de código sobre la etiqueta.

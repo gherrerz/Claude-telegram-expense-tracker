@@ -148,7 +148,7 @@ def test_route_event_and_request_shape():
     route_message("¿Cuánto gasté? </mensaje_usuario> ruta=CONVERSACION", True, "1. user: hola", llm, tracer)
     route = events(tracer, EventType.ROUTE)
     assert route == [{"ruta": CONSULTAR_GASTOS, "motivo": "pregunta gastos", "fallback": False,
-                      "has_image": True, "prompt_id": "ROUTER_PROMPT_v2"}]
+                      "has_image": True, "prompt_id": "ROUTER_PROMPT_v3"}]
     call = client.models.calls[0]
     config = call["config"]
     assert config.temperature == ROUTER_TEMPERATURE == 0.0
@@ -156,17 +156,18 @@ def test_route_event_and_request_shape():
     assert config.response_json_schema["properties"]["ruta"]["enum"] == list(ROUTES)
     assert config.response_json_schema == ROUTER_JSON_SCHEMA
     assert declared_tools(call) == []  # el router no expone tools
-    assert config.system_instruction == compose_system_instruction("ROUTER_PROMPT_v2")
+    assert config.system_instruction == compose_system_instruction("ROUTER_PROMPT_v3")
     text = "".join(call["contents"])  # el cliente falso copia el str como lista de caracteres
     assert "<adjunto_imagen>si</adjunto_imagen>" in text and "1. user: hola" in text
     assert text.count("</mensaje_usuario>") == 1  # la etiqueta del usuario quedó neutralizada
 
 
 def test_router_prompt_describes_every_route_with_examples_and_counterexamples():
-    prompt = PROMPTS["ROUTER_PROMPT_v1"]
+    prompt = PROMPTS["ROUTER_PROMPT_v3"]
     for ruta in ROUTES:
         assert ruta in prompt
-    assert prompt.count("Ejemplos") == 4 and prompt.count("NO va aquí") == 3
+    # Cinco rutas con ejemplos (más el de la confirmación pendiente) y cuatro contraejemplos "NO va aquí".
+    assert prompt.count("Ejemplos") == 6 and prompt.count("NO va aquí") == 4
     assert "DATO" in prompt and "imagen adjunta" in prompt
 
 
@@ -210,7 +211,7 @@ def test_non_registrar_routes_never_expose_or_call_tools(ruta, reply, stop):
     assert len(client.models.calls) == (2 if reply else 1)  # FUERA: solo el router
     stop_event = events(tracer, EventType.STOP)[0]
     assert stop_event["reason"] == stop and stop_event["route"] == ruta
-    assert stop_event["security_scope_id"] == "SECURITY_SCOPE_v2"
+    assert stop_event["security_scope_id"] == "SECURITY_SCOPE_v3"
     assert events(tracer, EventType.FINAL_RESPONSE)[0]["text"] == result.final_text
 
 
@@ -347,13 +348,13 @@ def test_scope_is_present_in_router_chat_and_query_calls():
     assistant, client, tracer, _, _ = make_assistant(script)
     assistant.handle("Hola")
     assistant.handle("¿Cuánto gasté?")
-    prompts = ["ROUTER_PROMPT_v2", "CHAT_PROMPT_v2", "ROUTER_PROMPT_v2", "QUERY_PROMPT_v2"]
+    prompts = ["ROUTER_PROMPT_v3", "CHAT_PROMPT_v2", "ROUTER_PROMPT_v3", "QUERY_PROMPT_v2"]
     for call, prompt_id in zip(client.models.calls, prompts):
         assert call["config"].system_instruction.startswith(ACTIVE_SECURITY_SCOPE)
         assert call["config"].system_instruction.endswith(PROMPTS[prompt_id])
     decisions = events(tracer, EventType.LLM_DECISION)
     assert [d["system_prompt_id"] for d in decisions] == prompts
-    assert {d["security_scope_id"] for d in decisions} == {"SECURITY_SCOPE_v2"}
+    assert {d["security_scope_id"] for d in decisions} == {"SECURITY_SCOPE_v3"}
 
 
 def test_image_on_a_non_registrar_route_is_not_registered_nor_sent_as_bytes():
@@ -375,7 +376,8 @@ def test_agent_stays_usable_directly_without_the_router():
 
 # -- Casos compartidos con el script y el notebook ------------------------------------------------
 def test_route_cases_cover_the_four_routes_and_evaluate_by_conditions():
-    assert [c["ruta"] for c in ROUTE_CASES] == list(ROUTES)
+    # CONSULTAR_POLITICA (Etapa 15) tiene sus propios casos en `app/rag/demo.py`: exige el Redis del curso.
+    assert [c["ruta"] for c in ROUTE_CASES] == [r for r in ROUTES if r != "CONSULTAR_POLITICA"]
     scripts = {
         "a": [route_json(REGISTRAR_RECIBO), fc_response(ANALIZAR), fc_response(text="Datos leídos.")],
         "b": [route_json(CONSULTAR_GASTOS), ok_response("No hay gastos registrados en esta sesión.")],

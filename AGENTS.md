@@ -11,14 +11,15 @@ Agente académico "Telegram Expense Tracker": foto de recibo → LLM con visión
 - Si un fallo afecta una etapa anterior, corrígelo primero y repite sus pruebas.
 
 ## Stack permitido
-Python 3.12, el SDK oficial de Gemini y las APIs de Google Drive y Sheets. Para la demo, una librería de Telegram. No agregues AWS, Docker, bases de datos, frontend, OCR externo, Redis, microservicios, OpenRouter ni otros proveedores de LLM en el código del agente.
+Python 3.12, el SDK oficial de Gemini y las APIs de Google Drive y Sheets. Para la demo, una librería de Telegram. Excepción A14 (bono RAG): **el Redis del curso, solo para el RAG** (cliente `redis` y `numpy`; los embeddings los calcula el mismo SDK de Gemini). No agregues AWS, Docker, bases de datos propias, frontend, OCR externo, un Redis o un índice vectorial local (el RAG solo vale con el Redis del curso), microservicios, OpenRouter ni otros proveedores de LLM en el código del agente.
 
 ## Seguridad
 - Credenciales solo por variables de entorno (ver `.env.example`). Nunca en código, notebook, trazas ni git.
-- Todas las llamadas al LLM incluyen el bloque de alcance vigente, `SECURITY_SCOPE_v2` (la v1 se conserva por trazabilidad; ver A13 en `docs/dev_prompts.md`).
+- Todas las llamadas al LLM incluyen el bloque de alcance vigente, `SECURITY_SCOPE_v3` (las versiones anteriores se conservan por trazabilidad; ver A13 y A14 en `docs/dev_prompts.md`).
 - El agente nunca transfiere, paga, borra, modifica cuentas ni ejecuta herramientas ante peticiones fuera de alcance.
-- `data/` contiene solo recibos sintéticos o anonimizados.
+- `data/` contiene solo recibos y documentos sintéticos o anonimizados (`data/corpus/` es el corpus ficticio del RAG).
 - Drive y Sheets: solo una carpeta y una planilla de prueba; Sheets solo admite agregar filas.
+- Redis del curso (RAG, A14): la URL (incluye la contraseña) va solo en `REDIS_URL`, nunca en código, docs, notebook ni trazas. Todo bajo el prefijo `REDIS_PREFIX` del grupo; jamás se toca otro prefijo ni se usa un prefijo vacío.
 
 ## Veracidad
 - No inventes datos de recibos, URLs, números de fila, IDs de modelo, límites de uso ni resultados de pruebas.

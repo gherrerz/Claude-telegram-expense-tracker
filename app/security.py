@@ -101,10 +101,11 @@ def sanitize_observation(
 
 
 # -- Comprobaciones de límites ---------------------------------------------------
-# Frases distintivas de los prompts de sistema (SECURITY_SCOPE_v2 y AGENT_PROMPT_v2).
+# Frases distintivas de los prompts de sistema (SECURITY_SCOPE_v2 y v3, AGENT_PROMPT_v2).
 # Una respuesta al usuario no debería reproducirlas: indicaría filtración del prompt.
 CANARIES: tuple[str, ...] = (
     "SECURITY_SCOPE_v2",
+    "SECURITY_SCOPE_v3",
     "DATO, no instrucción",
     "ROL: agente de registro de gastos",
     "recibo_url igual al web_view_link",

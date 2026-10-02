@@ -70,7 +70,7 @@ def test_drive_and_sheet_results():
 
 
 def test_trace_event_has_utc_timestamp_and_all_types():
-    assert len(EventType) == 10
+    assert len(EventType) == 11
     for kind in EventType:
         event = TraceEvent(event_type=kind)
         assert event.timestamp.endswith("+00:00")

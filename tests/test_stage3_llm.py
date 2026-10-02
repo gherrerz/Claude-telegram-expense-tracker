@@ -94,7 +94,7 @@ def test_counters_and_usage_traced():
     assert event.data["usage"]["prompt_token_count"] == 10
     assert event.data["params"]["temperature"] == EXTRACTION_TEMPERATURE
     assert event.data["system_prompt_id"] == "SMOKE_PROMPT_v1"
-    assert event.data["security_scope_id"] == "SECURITY_SCOPE_v2"
+    assert event.data["security_scope_id"] == "SECURITY_SCOPE_v3"
     assert "latency_ms" in event.data
 
 
@@ -106,7 +106,7 @@ def test_system_instruction_includes_security_scope_and_params_sent():
     )
     assert result.data == {"a": 1}
     config = client.models.calls[0]["config"]
-    assert "SECURITY_SCOPE_v2" in config.system_instruction
+    assert "SECURITY_SCOPE_v3" in config.system_instruction
     assert config.temperature == 1.0
     assert config.response_mime_type == "application/json"
     assert config.response_json_schema == {"type": "object"}

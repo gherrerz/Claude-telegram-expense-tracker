@@ -573,7 +573,7 @@ def test_router_input_carries_the_pending_confirmation_as_context_only():
     assert result.route == CONVERSACION and not result.decision.fallback
     route_event = h.events(EventType.ROUTE)[0]
     assert route_event["pending_confirmation"] == "duplicado"
-    assert route_event["prompt_id"] == "ROUTER_PROMPT_v2"
+    assert route_event["prompt_id"] == "ROUTER_PROMPT_v3"
 
 
 def test_prompts_are_versioned_and_old_versions_are_kept():

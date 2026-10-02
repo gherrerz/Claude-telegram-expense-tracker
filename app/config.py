@@ -6,6 +6,7 @@ ni incluye valores en los mensajes de error: solo nombres de variables.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Optional
@@ -19,11 +20,26 @@ DEFAULT_LLM_MIN_SECONDS_BETWEEN_CALLS = 4.0
 # Ruta por defecto (relativa a la raíz del repositorio) del token OAuth de Google.
 DEFAULT_GOOGLE_OAUTH_TOKEN = "secrets/token.json"
 
+# Etapa 15 (RAG con el Redis del curso, adenda A14). El modelo de embeddings y sus dimensiones
+# son constantes del código, no variables de entorno: el índice vectorial se crea con ellas y
+# cambiarlas obliga a reindexar (la firma del corpus las incluye).
+EMBEDDING_MODEL = "gemini-embedding-2"
+EMBEDDING_DIMS = 768
+DEFAULT_RAG_TOP_K = 3
+MAX_RAG_TOP_K = 10
+# PROVISIONAL hasta calibrar con `scripts/calibrate_rag_threshold.py` (Etapa 15): el valor de
+# partida es una estimación, no una medición. Se sobrescribe con `RAG_THRESHOLD`.
+DEFAULT_RAG_THRESHOLD = 0.60
+# Prefijo de grupo en el Redis compartido: solo letras, números, guion y guion bajo. Excluye los
+# comodines de patrón (`*?[]`) y los dos puntos, así ningún prefijo puede alcanzar claves ajenas.
+REDIS_PREFIX_PATTERN = re.compile(r"^[A-Za-z0-9_\-]+$")
+
 # Variables obligatorias por grupo de uso.
 REQUIRED_BY_GROUP: dict[str, tuple[str, ...]] = {
     "llm": ("GEMINI_API_KEY", "LLM_MODEL"),
     "google": ("GOOGLE_OAUTH_CLIENT_SECRETS", "DRIVE_FOLDER_ID", "SHEET_ID"),
     "telegram": ("TELEGRAM_BOT_TOKEN",),
+    "rag": ("REDIS_URL", "REDIS_PREFIX"),
 }
 
 ALL_VARIABLES: tuple[str, ...] = (
@@ -37,7 +53,12 @@ ALL_VARIABLES: tuple[str, ...] = (
     "SHEET_ID",
     "TELEGRAM_BOT_TOKEN",
     "TELEGRAM_ALLOWED_CHAT_IDS",
+    "REDIS_URL",
+    "REDIS_PREFIX",
 )
+
+# `RAG_TOP_K` y `RAG_THRESHOLD` son opcionales y NO forman parte de `ALL_VARIABLES`: son ajustes
+# con valor por defecto en el código, así que `.env.example` no está obligado a declararlos.
 
 # Variables cuyo valor es secreto (las usa el trazador para enmascarar).
 SECRET_VARIABLES: tuple[str, ...] = (
@@ -45,6 +66,7 @@ SECRET_VARIABLES: tuple[str, ...] = (
     "GOOGLE_OAUTH_CLIENT_SECRETS",
     "GOOGLE_OAUTH_TOKEN",
     "TELEGRAM_BOT_TOKEN",
+    "REDIS_URL",  # la URL incluye la contraseña del Redis del curso
 )
 
 
@@ -74,6 +96,11 @@ class Settings:
     telegram_bot_token: Optional[str] = None
     # Chats autorizados (Etapa 13). Vacío = sin restricción (el bot lo avisa al iniciar).
     telegram_allowed_chat_ids: tuple[int, ...] = ()
+    # RAG (Etapa 15): Redis del curso. `redis_url` es secreta (incluye la contraseña).
+    redis_url: Optional[str] = None
+    redis_prefix: Optional[str] = None
+    rag_top_k: int = DEFAULT_RAG_TOP_K
+    rag_threshold: float = DEFAULT_RAG_THRESHOLD
 
     def __repr__(self) -> str:  # evita filtrar secretos por accidente
         return "Settings(<oculto>)"
@@ -174,6 +201,34 @@ def load_settings(
                 "Valores inválidos (se espera una lista de enteros separados por comas)",
             ) from None
 
+    redis_prefix = _clean(source, "REDIS_PREFIX")
+    if redis_prefix is not None and not REDIS_PREFIX_PATTERN.fullmatch(redis_prefix):
+        raise ConfigError(
+            ["REDIS_PREFIX"], "Valores inválidos (se admiten letras, números, guion y guion bajo)"
+        )
+    rag_top_k = DEFAULT_RAG_TOP_K
+    raw = _clean(source, "RAG_TOP_K")
+    if raw is not None:
+        try:
+            rag_top_k = int(raw)
+            if not 1 <= rag_top_k <= MAX_RAG_TOP_K:
+                raise ValueError
+        except ValueError:
+            raise ConfigError(
+                ["RAG_TOP_K"], f"Valores inválidos (se espera un entero entre 1 y {MAX_RAG_TOP_K})"
+            ) from None
+    rag_threshold = DEFAULT_RAG_THRESHOLD
+    raw = _clean(source, "RAG_THRESHOLD")
+    if raw is not None:
+        try:
+            rag_threshold = float(raw)
+            if not 0.0 <= rag_threshold <= 1.0:
+                raise ValueError
+        except ValueError:
+            raise ConfigError(
+                ["RAG_THRESHOLD"], "Valores inválidos (se espera un número entre 0 y 1)"
+            ) from None
+
     return Settings(
         gemini_api_key=_clean(source, "GEMINI_API_KEY"),
         llm_model=_clean(source, "LLM_MODEL"),
@@ -185,6 +240,10 @@ def load_settings(
         sheet_id=_clean(source, "SHEET_ID"),
         telegram_bot_token=_clean(source, "TELEGRAM_BOT_TOKEN"),
         telegram_allowed_chat_ids=tuple(allowed_chat_ids),
+        redis_url=_clean(source, "REDIS_URL"),
+        redis_prefix=redis_prefix,
+        rag_top_k=rag_top_k,
+        rag_threshold=rag_threshold,
     )
 
 

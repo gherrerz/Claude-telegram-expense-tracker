@@ -21,3 +21,7 @@ google-auth-httplib2==0.4.3
 
 # Etapa 13: demo de Telegram (async). Documentación: https://docs.python-telegram-bot.org
 python-telegram-bot==22.8
+
+# Etapa 15: RAG con el Redis del curso (RediSearch). numpy solo convierte los vectores a FLOAT32.
+redis==8.1.0
+numpy==2.5.3

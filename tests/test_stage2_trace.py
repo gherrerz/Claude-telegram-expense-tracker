@@ -87,7 +87,7 @@ def test_all_event_types_accepted_and_counted(tmp_path):
     tracer = Tracer(session="s3", trace_dir=tmp_path, console=False)
     for kind in EventType:
         tracer.record(kind, {"i": kind.value})
-    assert len(tracer.events) == 10
+    assert len(tracer.events) == len(EventType) == 11
     assert tracer.count("TOOL_CALL") == 1
     rows = _read_jsonl(tmp_path / "s3.jsonl")
     assert [r["event_type"] for r in rows] == [k.value for k in EventType]

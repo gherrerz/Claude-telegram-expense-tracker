@@ -323,7 +323,11 @@ def _play_case(case: dict[str, Any], ctx: RunContext, tracer: Tracer, evidence: 
             "filas_antes": rows_before,
             "filas_despues": rows_after,
             "filas_registradas": probe.rows[rows_registered_before:],
-            "llamadas_llm": sum(1 for e in events if e.event_type == EventType.LLM_DECISION),
+            # Los embeddings (kind="embedding", Etapa 15) no son llamadas de generación ni llevan alcance.
+            "llamadas_llm": sum(
+                1 for e in events
+                if e.event_type == EventType.LLM_DECISION and e.data.get("kind") != "embedding"
+            ),
             "alcances": sorted({
                 e.data.get("security_scope_id") for e in events
                 if e.event_type == EventType.LLM_DECISION and e.data.get("security_scope_id")

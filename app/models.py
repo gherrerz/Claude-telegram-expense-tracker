@@ -76,6 +76,7 @@ class EventType(str, Enum):
 
     USER_INPUT = "USER_INPUT"
     ROUTE = "ROUTE"
+    RETRIEVAL = "RETRIEVAL"
     LLM_DECISION = "LLM_DECISION"
     TOOL_CALL = "TOOL_CALL"
     TOOL_RESULT = "TOOL_RESULT"
