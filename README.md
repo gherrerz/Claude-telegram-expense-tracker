@@ -29,6 +29,181 @@ Proyecto académico: tarea final del curso de agentes de IA. La entrega evaluada
 - [Prompts de desarrollo y bitácora por etapa](docs/dev_prompts.md)
 - [Prompt maestro de desarrollo](docs/prompt_maestro_v2.md)
 - [Reglas para agentes de código](AGENTS.md)
+- [Configuración paso a paso (Gemini, Google, Redis y Telegram)](#configuración-paso-a-paso)
+
+## Configuración paso a paso
+
+Guía para configurar tus propias credenciales gratuitas desde un clon limpio. Solo `GEMINI_API_KEY` y `LLM_MODEL` son obligatorias para el flujo central del notebook; Google, Redis y Telegram son opcionales (ver «Qué hace cada sección» en la ficha de reproducción). Los ejemplos usan marcadores `<...>`: nunca subas valores reales a git.
+
+### a. Requisitos previos
+
+1. Instala Python 3.12 y ten a mano una cuenta Gmail (la usarás en Google AI Studio y Google Cloud).
+2. Desde la raíz del repositorio, crea el entorno virtual `.venv`:
+   ```bash
+   py -3.12 -m venv .venv
+   ```
+3. Instala las dependencias en `.venv`:
+   ```bash
+   .venv\Scripts\python -m pip install -r requirements.txt
+   ```
+4. Ejecuta siempre los scripts con `.venv\Scripts\python` y abre el notebook con el kernel de `.venv`. Con el Python global aparece `ModuleNotFoundError`.
+
+Detalle: [Ficha de reproducción, punto 3](#3-dependencias-e-instalación).
+
+### b. Crear `.env` a partir de `.env.example`
+
+1. Copia la plantilla:
+   ```bash
+   copy .env.example .env
+   ```
+2. Edita `.env` y completa los valores en los pasos siguientes. `.env` está en `.gitignore`: no lo subas ni lo pegues en capturas o chats.
+3. Escribe cada variable como `NOMBRE=valor`, sin comillas ni espacios alrededor del `=`. **[SUPUESTO]** El formato sin comillas es el que usan las guías; `python-dotenv` también admite comillas, pero no se probó.
+
+Detalle: [Ficha de reproducción, punto 4 (variables de entorno)](#4-variables-de-entorno-nombres-y-función-sin-valores).
+
+### c. Gemini (Google AI Studio)
+
+1. Inicia sesión en <https://aistudio.google.com/apikey> con tu cuenta Google y crea una clave de API (no pide tarjeta). **[SUPUESTO]** Los nombres exactos de los botones pueden variar con la interfaz.
+2. Pega la clave en `.env` y fija el modelo confirmado:
+   ```
+   GEMINI_API_KEY=<tu-clave>
+   LLM_MODEL=gemini-3.5-flash-lite
+   ```
+3. Opcional: `LLM_MAX_RETRIES` (reintentos ante 429 y 503; 5 por defecto) y `LLM_MIN_SECONDS_BETWEEN_CALLS` (pausa entre llamadas; 4,0 s por defecto).
+4. Verifica con una llamada real (consume cuota gratuita):
+   ```bash
+   .venv\Scripts\python scripts\verify_stage_3.py
+   ```
+5. Los límites de uso dependen del modelo y de tu cuenta, y Google no publica cifras fijas por modelo: consulta los tuyos en <https://aistudio.google.com/rate-limit>.
+6. Envía solo recibos sintéticos (`data/receipts/`): en la capa gratuita Google puede usar los datos enviados.
+
+Detalle: [docs/setup_llm.md](docs/setup_llm.md).
+
+### d. Google Drive y Sheets (OAuth, opcional)
+
+1. En [Google Cloud Console](https://console.cloud.google.com/) crea un proyecto nuevo.
+2. En *APIs y servicios > Biblioteca* habilita **Google Drive API** y **Google Sheets API**.
+3. En *APIs y servicios > Pantalla de consentimiento de OAuth* elige tipo de usuario **Externo**, estado de publicación **Testing**, y agrega tu propia cuenta Gmail en **Usuarios de prueba**.
+4. En *Credenciales > Crear credenciales > ID de cliente de OAuth* elige **Aplicación de escritorio** y descarga el JSON.
+5. Guarda el JSON en `secrets/` (por ejemplo, `secrets/client_secret.json`). `secrets/` está en `.gitignore`.
+6. En `.env` pon la **ruta** al JSON, no el secreto que contiene:
+   ```
+   GOOGLE_OAUTH_CLIENT_SECRETS=secrets/client_secret.json
+   GOOGLE_OAUTH_TOKEN=secrets/token.json
+   ```
+7. Autoriza con tu cuenta (se abre el navegador; Google avisará de «app no verificada» porque está en Testing: continúa):
+   ```bash
+   .venv\Scripts\python scripts\google_auth.py
+   ```
+8. Deja `DRIVE_FOLDER_ID` y `SHEET_ID` en blanco en `.env` y crea la carpeta y la planilla de prueba. El script no crea un recurso cuyo ID ya esté definido:
+   ```bash
+   .venv\Scripts\python scripts\setup_google_resources.py
+   ```
+9. Pega en `.env` las dos líneas que imprime el script:
+   ```
+   DRIVE_FOLDER_ID=<id-de-la-carpeta>
+   SHEET_ID=<id-de-la-planilla>
+   ```
+10. Verifica Drive y luego Sheets (cada script termina con `RESULTADO: OK` si todo funciona):
+    ```bash
+    .venv\Scripts\python scripts\verify_stage_4.py
+    ```
+    ```bash
+    .venv\Scripts\python scripts\verify_stage_5.py
+    ```
+
+Con el scope `drive.file` la aplicación solo ve lo que creó ella misma: no uses carpetas ni planillas creadas a mano. Con la app en modo Testing el token caduca a los 7 días (ver «Problemas frecuentes»).
+
+Detalle: [docs/setup_google.md](docs/setup_google.md).
+
+### e. Redis del curso (RAG, opcional)
+
+1. Pide al docente la URL de conexión del Redis del curso (incluye la contraseña) y el prefijo de tu grupo.
+2. Agrégalos a `.env`. El prefijo admite solo letras, números, guion y guion bajo:
+   ```
+   REDIS_URL=<url-de-redis-entregada-por-el-docente>
+   REDIS_PREFIX=<prefijo-de-tu-grupo>
+   ```
+3. Opcional: `RAG_TOP_K` (1 a 10; 3 por defecto) y `RAG_THRESHOLD` (0 a 1; 0,75 por defecto). No hace falta declararlos.
+4. Comprueba la fragmentación del corpus sin red (solo lee y fragmenta):
+   ```bash
+   .venv\Scripts\python scripts\load_corpus.py --dry-run
+   ```
+5. Carga el corpus antes de la Sección 11 del notebook (se omite si no cambió; `--force` reconstruye solo tu índice):
+   ```bash
+   .venv\Scripts\python scripts\load_corpus.py
+   ```
+6. Verifica el RAG (termina con `RESULTADO: OK`):
+   ```bash
+   .venv\Scripts\python scripts\verify_stage_15.py
+   ```
+
+Redis es compartido: trabaja solo bajo tu prefijo y no pegues la URL en código, chats ni commits. Sin Redis solo se degrada el RAG; el resto del agente funciona.
+
+Detalle: [docs/setup_redis.md](docs/setup_redis.md).
+
+### f. Bot de Telegram (demo, opcional)
+
+1. En Telegram abre `@BotFather`, envía `/newbot`, indica un nombre visible y un nombre de usuario único que termine en `bot`. BotFather responde con el token.
+2. Agrega el token a `.env`:
+   ```
+   TELEGRAM_BOT_TOKEN=<token-de-botfather>
+   ```
+3. Arranca el bot (deja esa terminal abierta y ejecuta una sola instancia):
+   ```bash
+   .venv\Scripts\python -m app.telegram_bot
+   ```
+4. En Telegram envía `/start` a tu bot: responde con tu chat id.
+5. Agrega el chat id a `.env` (varios, separados por comas). Sin esta variable el bot queda abierto a cualquiera y escribe un WARNING al iniciar:
+   ```
+   TELEGRAM_ALLOWED_CHAT_IDS=<tu-chat-id>
+   ```
+6. Detén el bot con `Ctrl+C` y reinícialo con el comando del paso 3.
+
+Detalle: [docs/setup_telegram.md](docs/setup_telegram.md).
+
+### g. Ejemplo de `.env` completo
+
+Los valores son marcadores: reemplázalos por los tuyos.
+
+```
+# Gemini (obligatorio)
+GEMINI_API_KEY=<tu-clave>
+LLM_MODEL=gemini-3.5-flash-lite
+LLM_MAX_RETRIES=5
+LLM_MIN_SECONDS_BETWEEN_CALLS=4.0
+
+# Google Drive y Sheets (opcional)
+GOOGLE_OAUTH_CLIENT_SECRETS=secrets/client_secret.json
+GOOGLE_OAUTH_TOKEN=secrets/token.json
+DRIVE_FOLDER_ID=<id-de-la-carpeta>
+SHEET_ID=<id-de-la-planilla>
+
+# Redis del curso, RAG (opcional)
+REDIS_URL=<url-de-redis-entregada-por-el-docente>
+REDIS_PREFIX=<prefijo-de-tu-grupo>
+# RAG_TOP_K=3
+# RAG_THRESHOLD=0.75
+
+# Telegram, demo (opcional)
+TELEGRAM_BOT_TOKEN=<token-de-botfather>
+TELEGRAM_ALLOWED_CHAT_IDS=<tu-chat-id>
+```
+
+Detalle: [docs/setup_llm.md](docs/setup_llm.md), [docs/setup_google.md](docs/setup_google.md), [docs/setup_redis.md](docs/setup_redis.md) y [docs/setup_telegram.md](docs/setup_telegram.md).
+
+### h. Problemas frecuentes
+
+| Síntoma | Causa | Solución |
+|---|---|---|
+| `ModuleNotFoundError` al ejecutar un script o el notebook | Se usó el Python global en vez de `.venv` | Ejecuta con `.venv\Scripts\python ...` y selecciona el kernel de `.venv` en el notebook; si falta algún paquete, repite el `pip install -r requirements.txt` del punto a |
+| Error de configuración que nombra `GOOGLE_OAUTH_CLIENT_SECRETS` o `GOOGLE_OAUTH_TOKEN` («se espera la ruta a un archivo .json, no el secreto») | La variable contiene el secreto del cliente (`GOCSPX-<...>`) o un valor que no termina en `.json` | Pon la ruta al archivo, por ejemplo `secrets/client_secret.json`; el secreto queda dentro del JSON |
+| Mensaje de credenciales vencidas al guardar en Drive o Sheets | Con la app en modo Testing, el token caduca a los 7 días | Vuelve a ejecutar `.venv\Scripts\python scripts\google_auth.py` |
+| Error 403 `access_denied` al autorizar | Tu cuenta no está en **Usuarios de prueba**, o el JSON pertenece a otro proyecto de Google Cloud | Agrega tu cuenta como usuario de prueba y descarga el JSON desde el mismo proyecto donde habilitaste las APIs y configuraste la pantalla de consentimiento |
+| Error 404 en Drive o Sheets tras cambiar de cliente OAuth | `drive.file` solo ve lo que creó ese mismo cliente | Deja `DRIVE_FOLDER_ID` y `SHEET_ID` en blanco, ejecuta `scripts\google_auth.py` y luego `scripts\setup_google_resources.py` con `.venv\Scripts\python`, y actualiza ambos IDs en `.env` |
+| El bot no responde a `/start`, o el log muestra `Conflict` | El proceso no está corriendo, o hay dos instancias del bot con el mismo token | Ejecuta `.venv\Scripts\python -m app.telegram_bot` y deja la terminal abierta; cierra cualquier otra instancia (otra terminal u otro equipo) y deja solo una |
+
+Detalle: [Google](docs/setup_google.md), [LLM](docs/setup_llm.md), [Redis](docs/setup_redis.md) y [Telegram](docs/setup_telegram.md).
 
 ## Ficha de reproducción
 
